@@ -1,0 +1,62 @@
+import { Hono } from "hono";
+import { getServer } from "../db/servers";
+import { newId } from "../lib/id";
+import { jsonError } from "../lib/http";
+import type { Variables } from "../types";
+
+export const sessionRoutes = new Hono<{
+  Bindings: Env;
+  Variables: Variables;
+}>();
+
+sessionRoutes.post("/", async (c) => {
+  const user = c.get("user");
+  const body = await c.req.json<{ serverId?: string }>();
+
+  if (!body.serverId) {
+    return jsonError(c, 400, "serverId is required");
+  }
+
+  const server = await getServer(c.env.DB, user.id, body.serverId);
+  if (!server) {
+    return jsonError(c, 404, "server not found");
+  }
+
+  const sessionId = newId();
+  await c.env.DB
+    .prepare(
+      "INSERT INTO sessions (id, user_id, server_id, status) VALUES (?, ?, ?, 'active')",
+    )
+    .bind(sessionId, user.id, server.id)
+    .run();
+
+  const doId = c.env.SSH_SESSION.idFromName(`${user.id}:${sessionId}`);
+  const wsUrl = new URL(c.req.url);
+  wsUrl.pathname = `/api/v1/sessions/${sessionId}/ws`;
+
+  return c.json({
+    sessionId,
+    wsUrl: wsUrl.pathname,
+    status: "created",
+  });
+});
+
+sessionRoutes.get("/:id/ws", async (c) => {
+  const user = c.get("user");
+  const sessionId = c.req.param("id");
+
+  const session = await c.env.DB
+    .prepare(
+      "SELECT id, user_id, server_id, status FROM sessions WHERE id = ? AND user_id = ?",
+    )
+    .bind(sessionId, user.id)
+    .first<{ id: string; user_id: string; server_id: string; status: string }>();
+
+  if (!session) {
+    return jsonError(c, 404, "session not found");
+  }
+
+  const doId = c.env.SSH_SESSION.idFromName(`${user.id}:${sessionId}`);
+  const stub = c.env.SSH_SESSION.get(doId);
+  return stub.fetch(c.req.raw);
+});

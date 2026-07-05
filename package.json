@@ -1,0 +1,10 @@
+{
+  "name": "ternssh",
+  "private": true,
+  "scripts": {
+    "dev:server": "npm run dev --prefix server",
+    "dev:web": "npm run dev --prefix web",
+    "db:migrate:local": "npm run db:migrate:local --prefix server",
+    "build:web": "npm run build --prefix web"
+  }
+}
