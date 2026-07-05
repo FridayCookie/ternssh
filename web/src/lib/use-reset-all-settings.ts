@@ -16,7 +16,7 @@ export function useResetAllSettings() {
 
   return useCallback(async () => {
     clearAppSettingsStorage();
-    setLocale(detectDefaultLocale());
+    setLocale(detectDefaultLocale(), false);
     resetSiteName();
     resetPersonalization();
     await api.resetDashboard();

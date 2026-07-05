@@ -19,7 +19,7 @@ const STORAGE_KEY = "ternssh-locale";
 
 interface I18nContextValue {
   locale: Locale;
-  setLocale: (locale: Locale) => void;
+  setLocale: (locale: Locale, persist?: boolean) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
   messages: Messages;
 }
@@ -50,13 +50,15 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   const { messages, htmlLang } = getLocaleDefinition(locale);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, locale);
     document.documentElement.lang = htmlLang;
-  }, [htmlLang, locale]);
+  }, [htmlLang]);
 
-  const setLocale = useCallback((next: Locale) => {
+  const setLocale = useCallback((next: Locale, persist = true) => {
     if (isLocale(next)) {
       setLocaleState(next);
+      if (persist) {
+        localStorage.setItem(STORAGE_KEY, next);
+      }
     }
   }, []);
 

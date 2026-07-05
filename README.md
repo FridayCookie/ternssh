@@ -340,7 +340,7 @@ npm run db:migrate         # 远程（deploy 已包含）
 
 ```jsonc
 {
-  "name": "ternssh-api",
+  "name": "ternssh",
   "main": "server/src/index.ts",
   "assets": {
     "directory": "./server/public",

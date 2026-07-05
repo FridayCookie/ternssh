@@ -37,8 +37,25 @@ export function getLocaleDefinition(locale: Locale): LocaleDefinition {
   return localeById.get(locale)!;
 }
 
+export function detectBrowserLocale(): Locale {
+  const languages =
+    typeof navigator !== "undefined"
+      ? navigator.languages?.length
+        ? [...navigator.languages]
+        : [navigator.language]
+      : ["en"];
+
+  for (const language of languages) {
+    const tag = language.toLowerCase();
+    if (tag.startsWith("zh")) return "zh";
+    if (tag.startsWith("en")) return "en";
+  }
+
+  return "en";
+}
+
 export function getDefaultLocale(): Locale {
   const stored = localStorage.getItem("ternssh-locale");
   if (stored && isLocale(stored)) return stored;
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  return detectBrowserLocale();
 }

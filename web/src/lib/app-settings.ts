@@ -1,4 +1,5 @@
 import type { Locale } from "@/i18n/locales/index";
+import { detectBrowserLocale } from "@/i18n/locales/index";
 import { SITE_NAME_STORAGE_KEY } from "@/lib/site-name";
 import {
   BACKGROUND_STORAGE_KEY,
@@ -29,7 +30,7 @@ export function clearAppSettingsStorage(): void {
 }
 
 export function detectDefaultLocale(): Locale {
-  return navigator.language.toLowerCase().startsWith("zh") ? "zh" : "en";
+  return detectBrowserLocale();
 }
 
 export const SETTINGS_RESET_EVENT = "ternssh:settings-reset";
