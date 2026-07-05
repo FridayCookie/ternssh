@@ -92,9 +92,34 @@ npm run dev:server
 
 ### Deploy
 
+`wrangler.jsonc` is for **local development only** (`database_id: local-ternssh-db`). Production deploys use `wrangler.production.jsonc` (gitignored—each account has its own IDs; do not commit).
+
+**First deploy to Cloudflare:**
+
+```bash
+# 1. Create remote D1 database
+npx wrangler d1 create ternssh
+# Note the database_id from the output
+
+# 2. Create local production config (pick one)
+
+# Option A: copy template and edit account_id / database_id
+npm run deploy:config
+# Edit wrangler.production.jsonc
+
+# Option B: generate from env vars (good for CI / Cloudflare Builds)
+export D1_DATABASE_ID=<database_id from step 1>
+export CLOUDFLARE_ACCOUNT_ID=<optional, required with multiple accounts>
+
+# 3. Deploy
+npm run deploy
+```
+
+**Cloudflare Workers Builds (Git)**: set build env vars `D1_DATABASE_ID` (required) and `CLOUDFLARE_ACCOUNT_ID` (required if you have multiple accounts). Use build command `npm run deploy`.
+
 ```bash
 npm run deploy
-# Equivalent to: build frontend → remote D1 migrate → wrangler deploy
+# build frontend → generate wrangler.production.jsonc → remote D1 migrate → wrangler deploy
 ```
 
 | Component | Platform |
@@ -354,6 +379,10 @@ Reset all clears localStorage preferences and calls `POST /api/v1/me/reset` to w
 
 ## Configuration Reference
 
+- **`wrangler.jsonc`** — local development (`wrangler dev`), D1 uses `local-ternssh-db`
+- **`wrangler.production.jsonc.example`** — production config template
+- **`wrangler.production.jsonc`** — your production config (gitignored; copy from template or generate via script)
+
 Example root `wrangler.jsonc`:
 
 ```jsonc
@@ -368,7 +397,7 @@ Example root `wrangler.jsonc`:
   "d1_databases": [{
     "binding": "DB",
     "database_name": "ternssh",
-    "database_id": "<your-database-id>",
+    "database_id": "local-ternssh-db",
     "migrations_dir": "server/migrations"
   }],
   "durable_objects": {

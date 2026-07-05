@@ -5,4 +5,5 @@ dist/
 .env
 .env.*
 !.env.example
+wrangler.production.jsonc
 .DS_Store

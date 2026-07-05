@@ -92,9 +92,34 @@ npm run dev:server
 
 ### 部署
 
+`wrangler.jsonc` 仅用于**本地开发**（`database_id: local-ternssh-db`）。生产部署使用 `wrangler.production.jsonc`（已加入 `.gitignore`，每人账号不同，勿提交仓库）。
+
+**首次部署到 Cloudflare：**
+
+```bash
+# 1. 创建远程 D1 数据库
+npx wrangler d1 create ternssh
+# 记下输出的 database_id
+
+# 2. 生成本地生产配置（二选一）
+
+# 方式 A：复制模板后手动编辑 account_id / database_id
+npm run deploy:config
+# 编辑 wrangler.production.jsonc
+
+# 方式 B：用环境变量生成（适合 CI / Cloudflare 构建）
+export D1_DATABASE_ID=<上一步的 database_id>
+export CLOUDFLARE_ACCOUNT_ID=<可选，多账号时指定>
+
+# 3. 部署
+npm run deploy
+```
+
+**Cloudflare Workers 构建（Git 连接）**：在构建环境变量中设置 `D1_DATABASE_ID`（必填）和 `CLOUDFLARE_ACCOUNT_ID`（多账号时必填），构建命令使用 `npm run deploy`。
+
 ```bash
 npm run deploy
-# 等价于：构建前端 → 远程 D1 迁移 → wrangler deploy
+# 等价于：构建前端 → 生成 wrangler.production.jsonc → 远程 D1 迁移 → wrangler deploy
 ```
 
 | 组件 | 平台 |
@@ -354,6 +379,10 @@ npm run db:migrate         # 远程（deploy 已包含）
 
 ## 配置参考
 
+- **`wrangler.jsonc`** — 本地开发（`wrangler dev`），D1 使用 `local-ternssh-db`
+- **`wrangler.production.jsonc.example`** — 生产配置模板
+- **`wrangler.production.jsonc`** — 你的生产配置（gitignore，从模板复制或脚本生成）
+
 根目录 `wrangler.jsonc` 示例：
 
 ```jsonc
@@ -368,7 +397,7 @@ npm run db:migrate         # 远程（deploy 已包含）
   "d1_databases": [{
     "binding": "DB",
     "database_name": "ternssh",
-    "database_id": "<your-database-id>",
+    "database_id": "local-ternssh-db",
     "migrations_dir": "server/migrations"
   }],
   "durable_objects": {
