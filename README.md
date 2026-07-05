@@ -379,4 +379,4 @@ CREATE INDEX idx_sessions_user_id ON sessions(user_id);
 
 ## License
 
-TBD
+This project is licensed under the [GNU General Public License v3.0](LICENSE) (GPLv3).

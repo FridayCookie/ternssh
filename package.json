@@ -1,6 +1,7 @@
 {
   "name": "ternssh",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "dev:server": "npm run dev --prefix server",
     "dev:web": "npm run dev --prefix web",
