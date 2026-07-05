@@ -72,7 +72,8 @@ export function ContextMenu({ open, x, y, items, onClose }: ContextMenuProps) {
           disabled={item.disabled}
           className={cn(
             "flex w-full px-3 py-1.5 text-left text-sm transition-colors hover:bg-[var(--color-secondary)] disabled:cursor-not-allowed disabled:opacity-40",
-            item.danger && "text-red-400 hover:bg-red-950/40",
+            item.danger &&
+              "text-[var(--color-destructive)] hover:bg-[color-mix(in_oklch,var(--color-destructive)_12%,var(--color-secondary))]",
           )}
           onClick={() => {
             if (item.disabled) return;

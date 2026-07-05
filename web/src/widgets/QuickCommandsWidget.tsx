@@ -164,7 +164,7 @@ export function QuickCommandsWidget({
       </div>
 
       {error && (
-        <p className="rounded border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[11px] text-red-400">
+        <p className="rounded border border-[color-mix(in_oklch,var(--color-destructive)_30%,transparent)] bg-[color-mix(in_oklch,var(--color-destructive)_10%,transparent)] px-2 py-1.5 text-[11px] text-[var(--color-destructive)]">
           {error}
         </p>
       )}

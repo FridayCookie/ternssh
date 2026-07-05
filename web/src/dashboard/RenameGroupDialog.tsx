@@ -70,7 +70,7 @@ export function RenameGroupDialog({
           />
         </div>
 
-        {error && <p className="text-sm text-red-400">{error}</p>}
+        {error && <p className="text-sm text-[var(--color-destructive)]">{error}</p>}
 
         <div className="flex justify-end gap-2">
           <Button

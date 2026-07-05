@@ -2,6 +2,7 @@ import { useEffect, useRef } from "react";
 import { FitAddon } from "@xterm/addon-fit";
 import { Terminal } from "@xterm/xterm";
 import { useI18n } from "@/i18n";
+import { getTerminalTheme, useTheme } from "@/theme";
 import {
   MAX_SESSION_RECONNECT_ATTEMPTS,
   type ServerSession,
@@ -56,6 +57,7 @@ interface SessionPaneProps {
   onStatusChange: (status: ServerSession["status"]) => void;
   onClosed: () => void;
   t: (key: string, params?: Record<string, string | number>) => string;
+  resolvedTheme: "light" | "dark";
 }
 
 function SessionPane({
@@ -64,6 +66,7 @@ function SessionPane({
   onStatusChange,
   onClosed,
   t,
+  resolvedTheme,
 }: SessionPaneProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
@@ -90,11 +93,7 @@ function SessionPane({
       convertEol: true,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       fontSize: 13,
-      theme: {
-        background: "#0a0a0a",
-        foreground: "#f5f5f5",
-        cursor: "#72d4a8",
-      },
+      theme: getTerminalTheme(resolvedTheme),
     });
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
@@ -109,6 +108,12 @@ function SessionPane({
       fitAddonRef.current = null;
     };
   }, [session.serverId]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.options.theme = getTerminalTheme(resolvedTheme);
+  }, [resolvedTheme]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -237,7 +242,7 @@ function SessionPane({
     <div
       ref={containerRef}
       className={cn(
-        "absolute inset-0 overflow-hidden bg-[#0a0a0a] p-1",
+        "absolute inset-0 overflow-hidden bg-[var(--terminal-background)] p-1",
         !active && "invisible pointer-events-none",
       )}
     />
@@ -252,6 +257,7 @@ export function TerminalWidget({
   onStatusChange,
 }: TerminalWidgetProps) {
   const { t } = useI18n();
+  const { resolvedTheme } = useTheme();
   const activeSession = sessions.find(
     (session) => session.serverId === activeServerId,
   );
@@ -272,6 +278,7 @@ export function TerminalWidget({
           <SessionPane
             key={`${session.serverId}:${session.sessionId}`}
             active={session.serverId === activeServerId}
+            resolvedTheme={resolvedTheme}
             session={session}
             t={t}
             onClosed={() => onSessionClosed(session.serverId)}

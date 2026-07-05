@@ -559,7 +559,7 @@ export function DashboardView() {
     return (
       <>
         <WorkspaceHeader />
-        <div className="workspace flex items-center justify-center text-sm text-red-400">
+        <div className="workspace flex items-center justify-center text-sm text-[var(--color-destructive)]">
           {error}
         </div>
       </>
@@ -593,7 +593,7 @@ export function DashboardView() {
 
       <div className="workspace">
       {error && (
-        <div className="workspace-toast text-red-400">{error}</div>
+        <div className="workspace-toast text-[var(--color-destructive)]">{error}</div>
       )}
 
       <GridDashboard

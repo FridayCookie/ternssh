@@ -72,7 +72,7 @@ function MetricBar({
           className={cn(
             "h-full transition-all",
             barClassName ??
-              (percent >= 90 ? "bg-red-400" : "bg-[var(--color-primary)]"),
+              (percent >= 90 ? "bg-[var(--color-destructive)]" : "bg-[var(--color-primary)]"),
           )}
           style={{ width: `${Math.max(0, Math.min(100, percent))}%` }}
         />
@@ -169,7 +169,7 @@ function BandwidthChart({
             : null
         }
         detail={formatBitrate(txRate)}
-        barClassName="bg-emerald-400"
+        barClassName="bg-[var(--color-success)]"
       />
 
       <div className="space-y-1">
@@ -211,7 +211,7 @@ function BandwidthChart({
                       })}
                     />
                     <div
-                      className="w-1/2 bg-emerald-400/90 transition-all"
+                      className="w-1/2 bg-[var(--color-success)]/90 transition-all"
                       style={{
                         height: `${barHeightPx(sample.tx, txScaleMax)}px`,
                       }}
@@ -390,7 +390,7 @@ export function StatusWidget({
       )}
 
       {isSessionAlive(session.status) && error && (
-        <div className="border-b border-red-900/40 bg-red-950/30 px-3 py-2 text-xs text-red-300">
+        <div className="alert-destructive px-3 py-2 text-xs">
           {error}
         </div>
       )}

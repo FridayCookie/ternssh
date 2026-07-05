@@ -286,8 +286,8 @@ export function ServerListWidget({
 
   const sessionStatusClass = (status: SessionStatus | undefined) => {
     if (status === "open") return "bg-[var(--color-primary)]";
-    if (status === "connecting") return "bg-amber-400";
-    if (status === "error") return "bg-red-400";
+    if (status === "connecting") return "bg-[var(--color-warning)]";
+    if (status === "error") return "bg-[var(--color-destructive)]";
     if (status === "closed") return "bg-[var(--color-muted-foreground)]";
     return "bg-transparent";
   };

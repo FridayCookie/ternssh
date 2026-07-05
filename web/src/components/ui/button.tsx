@@ -21,7 +21,8 @@ export function Button({
         variant === "secondary" &&
           "bg-[var(--color-secondary)] text-[var(--color-secondary-foreground)] hover:opacity-90",
         variant === "ghost" && "hover:bg-[var(--color-secondary)]",
-        variant === "destructive" && "bg-red-600 text-white hover:bg-red-500",
+        variant === "destructive" &&
+          "bg-[var(--color-destructive)] text-[var(--color-destructive-foreground)] hover:opacity-90",
         size === "default" && "h-9 px-4 py-2",
         size === "sm" && "h-8 px-3 text-xs",
         size === "icon" && "h-9 w-9",

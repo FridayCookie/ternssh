@@ -1,5 +1,6 @@
 import { LanguageSelect } from "@/components/LanguageSelect";
 import { Modal } from "@/components/Modal";
+import { ThemeSelect } from "@/components/ThemeSelect";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
 
@@ -22,6 +23,10 @@ export function SettingsDialog({ open, onOpenChange }: SettingsDialogProps) {
 
       <div className="space-y-5">
         <section className="space-y-2">
+          <ThemeSelect />
+        </section>
+
+        <section className="space-y-2 border-t border-[var(--color-border)] pt-5">
           <LanguageSelect />
           <p className="text-[11px] text-[var(--color-muted-foreground)]">
             {t("header.languageHint")}
