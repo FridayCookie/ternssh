@@ -18,6 +18,14 @@ export type SftpClientStatus =
   | "error"
   | "closed";
 
+export const MAX_SFTP_FILE_SIZE = 500 * 1024 * 1024;
+const UPLOAD_CHUNK_SIZE = 32 * 1024;
+
+export interface SftpUploadProgress {
+  loaded: number;
+  total: number;
+}
+
 interface Waiter {
   match: (message: Record<string, unknown>) => boolean;
   resolve: (message: Record<string, unknown>) => void;
@@ -35,6 +43,10 @@ export class SftpClient {
   private waiters: Waiter[] = [];
   private closed = false;
   private intentionalClose = false;
+  private sftpReady = false;
+  private uploadProgressHandler: ((progress: SftpUploadProgress) => void) | null =
+    null;
+  private uploadChain: Promise<void> = Promise.resolve();
 
   get connected(): boolean {
     return this.ws?.readyState === WebSocket.OPEN;
@@ -54,6 +66,7 @@ export class SftpClient {
       ws.onerror = () => reject(new Error("SFTP WebSocket 连接失败"));
       ws.onclose = () => {
         this.closed = true;
+        this.sftpReady = false;
         if (!this.intentionalClose) {
           this.rejectAll(new Error("SFTP 连接已关闭"));
         } else {
@@ -72,6 +85,10 @@ export class SftpClient {
       "等待 SFTP 通道超时",
     );
 
+    await this.initializeSftp();
+  }
+
+  private async initializeSftp(): Promise<void> {
     this.send({ type: "sftp_init" });
 
     for (let attempt = 0; attempt < 20; attempt++) {
@@ -82,6 +99,7 @@ export class SftpClient {
       );
 
       if (message.type === "sftp_ready") {
+        this.sftpReady = true;
         return;
       }
 
@@ -96,57 +114,204 @@ export class SftpClient {
     }
   }
 
-  async list(path: string): Promise<{ path: string; entries: SftpEntry[] }> {
-    this.send({ type: "sftp_list", path });
-    const message = await this.waitFor(
-      (item) => item.type === "sftp_list_result" || item.type === "sftp_error",
-      20_000,
-      "列出目录超时",
-    );
-
-    if (message.type === "sftp_error") {
-      throw new Error(String(message.message ?? "列出目录失败"));
+  private async ensureSftpReady(): Promise<void> {
+    if (this.sftpReady) return;
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("SFTP 未连接");
     }
+    await this.initializeSftp();
+  }
 
-    return {
-      path: String(message.path ?? path),
-      entries: (message.entries as SftpEntry[] | undefined) ?? [],
-    };
+  private isChannelResetError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return (
+      error.message.includes("SFTP 通道已关闭") ||
+      error.message.includes("SFTP 未初始化") ||
+      error.message.includes("SFTP 未就绪")
+    );
+  }
+
+  private async withSftpRetry<T>(operation: () => Promise<T>): Promise<T> {
+    try {
+      return await operation();
+    } catch (error) {
+      if (!this.isChannelResetError(error)) {
+        throw error;
+      }
+      this.sftpReady = false;
+      await this.ensureSftpReady();
+      return operation();
+    }
+  }
+
+  async list(path: string): Promise<{ path: string; entries: SftpEntry[] }> {
+    return this.withSftpRetry(async () => {
+      await this.ensureSftpReady();
+      this.send({ type: "sftp_list", path });
+      const message = await this.waitFor(
+        (item) => item.type === "sftp_list_result" || item.type === "sftp_error",
+        20_000,
+        "列出目录超时",
+      );
+
+      if (message.type === "sftp_error") {
+        throw new Error(String(message.message ?? "列出目录失败"));
+      }
+
+      return {
+        path: String(message.path ?? path),
+        entries: (message.entries as SftpEntry[] | undefined) ?? [],
+      };
+    });
   }
 
   async mkdir(path: string): Promise<void> {
-    this.send({ type: "sftp_mkdir", path });
-    const message = await this.waitFor(
-      (item) =>
-        item.type === "sftp_mkdir_result" ||
-        item.type === "sftp_error",
-      15_000,
-      "创建目录超时",
-    );
+    return this.withSftpRetry(async () => {
+      await this.ensureSftpReady();
+      this.send({ type: "sftp_mkdir", path });
+      const message = await this.waitFor(
+        (item) =>
+          item.type === "sftp_mkdir_result" ||
+          item.type === "sftp_error",
+        15_000,
+        "创建目录超时",
+      );
 
-    if (message.type === "sftp_error") {
-      throw new Error(String(message.message ?? "创建目录失败"));
-    }
+      if (message.type === "sftp_error") {
+        throw new Error(String(message.message ?? "创建目录失败"));
+      }
+    });
   }
 
   async deletePath(path: string): Promise<void> {
-    this.send({ type: "sftp_delete", path });
-    const message = await this.waitFor(
-      (item) =>
-        item.type === "sftp_delete_result" ||
-        item.type === "sftp_error",
-      15_000,
-      "删除超时",
-    );
+    return this.withSftpRetry(async () => {
+      await this.ensureSftpReady();
+      this.send({ type: "sftp_delete", path });
+      const message = await this.waitFor(
+        (item) =>
+          item.type === "sftp_delete_result" ||
+          item.type === "sftp_error",
+        15_000,
+        "删除超时",
+      );
 
-    if (message.type === "sftp_error") {
-      throw new Error(String(message.message ?? "删除失败"));
+      if (message.type === "sftp_error") {
+        throw new Error(String(message.message ?? "删除失败"));
+      }
+    });
+  }
+
+  async upload(
+    remotePath: string,
+    file: File,
+    onProgress?: (progress: SftpUploadProgress) => void,
+  ): Promise<void> {
+    if (file.size > MAX_SFTP_FILE_SIZE) {
+      throw new Error(
+        `文件过大 (${formatFileSize(file.size)})，最大支持 ${formatFileSize(MAX_SFTP_FILE_SIZE)}`,
+      );
+    }
+
+    const run = () =>
+      this.withSftpRetry(() => this.uploadFile(remotePath, file, onProgress));
+    const result = this.uploadChain.then(run);
+    this.uploadChain = result.then(
+      () => {},
+      () => {},
+    );
+    return result;
+  }
+
+  cancelUpload(): void {
+    try {
+      this.send({ type: "sftp_upload_cancel" });
+    } catch {
+      // ignore
+    }
+    this.uploadProgressHandler = null;
+  }
+
+  private async uploadFile(
+    remotePath: string,
+    file: File,
+    onProgress?: (progress: SftpUploadProgress) => void,
+  ): Promise<void> {
+    await this.ensureSftpReady();
+    const total = file.size;
+    this.send({ type: "sftp_upload_start", path: remotePath, size: total });
+
+    const readyMessage = await this.waitFor(
+      (item) => item.type === "sftp_upload_ready" || item.type === "sftp_error",
+      30_000,
+      "上传初始化超时",
+    );
+    if (readyMessage.type === "sftp_error") {
+      throw new Error(String(readyMessage.message ?? "上传初始化失败"));
+    }
+
+    this.uploadProgressHandler = (progress) => {
+      onProgress?.(progress);
+    };
+
+    try {
+      let offset = 0;
+      while (offset < total) {
+        const chunk = file.slice(offset, offset + UPLOAD_CHUNK_SIZE);
+        const buffer = await chunk.arrayBuffer();
+        const chunkBytes = new Uint8Array(buffer);
+        const nextOffset = offset + chunkBytes.byteLength;
+        this.sendBinary(chunkBytes);
+
+        const ackMessage = await this.waitFor(
+          (item) =>
+            item.type === "sftp_upload_chunk_ack" ||
+            item.type === "sftp_error",
+          120_000,
+          "上传数据块超时",
+        );
+        if (ackMessage.type === "sftp_error") {
+          throw new Error(String(ackMessage.message ?? "上传失败"));
+        }
+
+        const loaded = Number(ackMessage.loaded ?? 0);
+        if (loaded < nextOffset) {
+          throw new Error("上传数据块确认异常");
+        }
+
+        offset = nextOffset;
+        onProgress?.({ loaded: offset, total });
+      }
+
+      this.send({ type: "sftp_upload_end" });
+
+      const completeTimeout = Math.min(
+        10 * 60 * 1000,
+        Math.max(60_000, Math.ceil(total / UPLOAD_CHUNK_SIZE) * 15_000),
+      );
+      const completeMessage = await this.waitFor(
+        (item) =>
+          item.type === "sftp_upload_complete" ||
+          item.type === "sftp_upload_cancelled" ||
+          item.type === "sftp_error",
+        completeTimeout,
+        "上传完成超时",
+      );
+
+      if (completeMessage.type === "sftp_upload_cancelled") {
+        throw new Error("上传已取消");
+      }
+      if (completeMessage.type === "sftp_error") {
+        throw new Error(String(completeMessage.message ?? "上传失败"));
+      }
+    } finally {
+      this.uploadProgressHandler = null;
     }
   }
 
   disconnect(): void {
     this.intentionalClose = true;
     this.closed = true;
+    this.sftpReady = false;
     this.clearWaiters();
     if (this.ws) {
       try {
@@ -168,6 +333,13 @@ export class SftpClient {
     this.ws.send(JSON.stringify(payload));
   }
 
+  private sendBinary(data: Uint8Array): void {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("SFTP 未连接");
+    }
+    this.ws.send(data);
+  }
+
   private async handleMessage(data: string | Blob | ArrayBuffer): Promise<void> {
     if (typeof data !== "string") return;
 
@@ -181,14 +353,23 @@ export class SftpClient {
     const type = message.type;
     if (typeof type !== "string") return;
 
+    if (type === "sftp_upload_progress") {
+      this.uploadProgressHandler?.({
+        loaded: Number(message.loaded ?? 0),
+        total: Number(message.total ?? 0),
+      });
+      return;
+    }
+
+    if (type === "sftp_reset") {
+      this.sftpReady = false;
+      return;
+    }
+
     if (type === "sftp_closed") {
-      if (!this.intentionalClose && this.ws) {
+      this.sftpReady = false;
+      if (!this.intentionalClose) {
         this.rejectAll(new Error(String(message.message ?? "SFTP 通道已关闭")));
-        try {
-          this.ws.close();
-        } catch {
-          // ignore
-        }
       }
       return;
     }
@@ -283,4 +464,92 @@ export function sortSftpEntries(entries: SftpEntry[]): SftpEntry[] {
     if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
     return a.name.localeCompare(b.name, undefined, { sensitivity: "base" });
   });
+}
+
+export interface LocalDropItem {
+  file: File;
+  relativePath: string;
+}
+
+export async function collectDroppedFiles(
+  dataTransfer: DataTransfer,
+): Promise<LocalDropItem[]> {
+  const items = dataTransfer.items;
+  const results: LocalDropItem[] = [];
+
+  const readAllEntries = (
+    reader: FileSystemDirectoryReader,
+  ): Promise<FileSystemEntry[]> =>
+    new Promise((resolve, reject) => {
+      const entries: FileSystemEntry[] = [];
+      const readBatch = () => {
+        reader.readEntries(
+          (batch) => {
+            if (batch.length === 0) {
+              resolve(entries);
+              return;
+            }
+            entries.push(...batch);
+            readBatch();
+          },
+          reject,
+        );
+      };
+      readBatch();
+    });
+
+  const traverse = async (
+    entry: FileSystemEntry,
+    prefix: string,
+  ): Promise<void> => {
+    if (entry.isFile) {
+      const file = await new Promise<File>((resolve, reject) => {
+        (entry as FileSystemFileEntry).file(resolve, reject);
+      });
+      const name = prefix ? `${prefix}/${entry.name}` : entry.name;
+      results.push({ file, relativePath: name });
+      return;
+    }
+
+    if (entry.isDirectory) {
+      const nextPrefix = prefix ? `${prefix}/${entry.name}` : entry.name;
+      const reader = (entry as FileSystemDirectoryEntry).createReader();
+      const children = await readAllEntries(reader);
+      for (const child of children) {
+        await traverse(child, nextPrefix);
+      }
+    }
+  };
+
+  if (items && items.length > 0) {
+    for (const item of items) {
+      if (item.kind !== "file") continue;
+      const entry = item.webkitGetAsEntry?.();
+      if (entry) {
+        await traverse(entry, "");
+        continue;
+      }
+      const file = item.getAsFile();
+      if (file) {
+        results.push({ file, relativePath: file.name });
+      }
+    }
+    return results;
+  }
+
+  for (const file of dataTransfer.files) {
+    results.push({ file, relativePath: file.name });
+  }
+  return results;
+}
+
+function formatFileSize(bytes: number): string {
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value >= 10 || unitIndex === 0 ? value.toFixed(0) : value.toFixed(1)} ${units[unitIndex]}`;
 }

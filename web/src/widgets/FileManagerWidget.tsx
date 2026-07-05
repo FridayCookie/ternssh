@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent, type DragEvent, type MouseEvent } from "react";
 import {
   ArrowUp,
   File,
@@ -8,6 +8,7 @@ import {
   Link2,
   RefreshCw,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { ContextMenu, type ContextMenuItem } from "@/components/ContextMenu";
 import { Button } from "@/components/ui/button";
@@ -18,6 +19,7 @@ import {
   type ServerSession,
 } from "@/lib/sessions";
 import {
+  collectDroppedFiles,
   joinRemotePath,
   isRemoteRoot,
   parentRemotePath,
@@ -38,6 +40,40 @@ interface MenuState {
   target: { kind: "blank" } | { kind: "entry"; entry: SftpEntry };
 }
 
+interface UploadState {
+  name: string;
+  loaded: number;
+  total: number;
+}
+
+function formatUploadProgress(loaded: number, total: number): string {
+  if (total <= 0) return "0%";
+  return `${Math.min(100, Math.round((loaded / total) * 100))}%`;
+}
+
+async function ensureRemoteDirectories(
+  client: SftpClient,
+  basePath: string,
+  relativePath: string,
+  created: Set<string>,
+): Promise<void> {
+  const parts = relativePath.split("/").filter(Boolean);
+  parts.pop();
+  if (parts.length === 0) return;
+
+  let current = basePath;
+  for (const part of parts) {
+    current = joinRemotePath(current, part);
+    if (created.has(current)) continue;
+    try {
+      await client.mkdir(current);
+    } catch {
+      // directory may already exist
+    }
+    created.add(current);
+  }
+}
+
 function formatModifiedTime(timestamp: number): string {
   if (!timestamp) return "-";
   return new Date(timestamp * 1000).toLocaleString();
@@ -49,7 +85,9 @@ export function FileManagerWidget({
 }: FileManagerWidgetProps) {
   const session = activeServerId ? sessions[activeServerId] : null;
   const clientRef = useRef<SftpClient | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const mountedRef = useRef(true);
+  const createdDirsRef = useRef<Set<string>>(new Set());
   const [remotePath, setRemotePath] = useState(".");
   const [pathInput, setPathInput] = useState(".");
   const [entries, setEntries] = useState<SftpEntry[]>([]);
@@ -58,6 +96,10 @@ export function FileManagerWidget({
   const [ready, setReady] = useState(false);
   const [selectedName, setSelectedName] = useState<string | null>(null);
   const [menu, setMenu] = useState<MenuState | null>(null);
+  const [dragActive, setDragActive] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const [uploadState, setUploadState] = useState<UploadState | null>(null);
+  const dragDepthRef = useRef(0);
 
   const sortedEntries = useMemo(() => sortSftpEntries(entries), [entries]);
 
@@ -236,6 +278,89 @@ export function FileManagerWidget({
     await handleDeleteEntry(entry);
   };
 
+  const uploadLocalItems = useCallback(
+    async (items: { file: File; relativePath: string }[]) => {
+      if (!isActive() || !ready || !clientRef.current || items.length === 0) {
+        return;
+      }
+
+      const client = clientRef.current;
+      setUploading(true);
+      setError(null);
+      createdDirsRef.current = new Set();
+
+      try {
+        for (const item of items) {
+          if (!isActive()) return;
+
+          const targetPath = joinRemotePath(remotePath, item.relativePath);
+          await ensureRemoteDirectories(
+            client,
+            remotePath,
+            item.relativePath,
+            createdDirsRef.current,
+          );
+
+          setUploadState({
+            name: item.relativePath,
+            loaded: 0,
+            total: item.file.size,
+          });
+
+          await client.upload(targetPath, item.file, (progress) => {
+            if (!isActive()) return;
+            setUploadState({
+              name: item.relativePath,
+              loaded: progress.loaded,
+              total: progress.total,
+            });
+          });
+        }
+
+        if (!isActive()) return;
+        await loadDirectory(remotePath);
+      } catch (err) {
+        if (!isActive()) return;
+        setError(err instanceof Error ? err.message : "上传失败");
+      } finally {
+        if (isActive()) {
+          setUploading(false);
+          setUploadState(null);
+        }
+      }
+    },
+    [isActive, ready, remotePath, loadDirectory],
+  );
+
+  const handleDrop = useCallback(
+    async (event: DragEvent) => {
+      event.preventDefault();
+      dragDepthRef.current = 0;
+      setDragActive(false);
+      if (!ready || uploading || loading) return;
+
+      const items = await collectDroppedFiles(event.dataTransfer);
+      if (items.length === 0) return;
+      await uploadLocalItems(items);
+    },
+    [ready, uploading, loading, uploadLocalItems],
+  );
+
+  const handleFileInputChange = useCallback(
+    async (event: ChangeEvent<HTMLInputElement>) => {
+      const fileList = event.target.files;
+      if (!fileList || fileList.length === 0) return;
+
+      const items = Array.from(fileList).map((file) => ({
+        file,
+        relativePath: file.name,
+      }));
+      event.target.value = "";
+      await uploadLocalItems(items);
+    },
+    [uploadLocalItems],
+  );
+
   const openContextMenu = (
     event: MouseEvent,
     target: MenuState["target"],
@@ -254,6 +379,11 @@ export function FileManagerWidget({
 
     if (menu.target.kind === "blank") {
       return [
+        {
+          id: "upload",
+          label: "上传文件",
+          onSelect: () => fileInputRef.current?.click(),
+        },
         {
           id: "mkdir",
           label: "新建文件夹",
@@ -317,7 +447,36 @@ export function FileManagerWidget({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div
+      className="relative flex h-full min-h-0 flex-col"
+      onDragEnter={(event) => {
+        event.preventDefault();
+        if (!ready || uploading || loading) return;
+        dragDepthRef.current += 1;
+        setDragActive(true);
+      }}
+      onDragOver={(event) => {
+        event.preventDefault();
+        if (!ready || uploading || loading) return;
+        event.dataTransfer.dropEffect = "copy";
+        setDragActive(true);
+      }}
+      onDragLeave={(event) => {
+        event.preventDefault();
+        dragDepthRef.current = Math.max(0, dragDepthRef.current - 1);
+        if (dragDepthRef.current === 0) {
+          setDragActive(false);
+        }
+      }}
+      onDrop={(event) => void handleDrop(event)}
+    >
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={(event) => void handleFileInputChange(event)}
+      />
       <div className="flex flex-wrap items-center gap-1 border-b border-[var(--color-border)] p-2">
         <Button
           size="sm"
@@ -345,6 +504,15 @@ export function FileManagerWidget({
           title="刷新"
         >
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
+        </Button>
+        <Button
+          size="sm"
+          variant="secondary"
+          disabled={loading || !ready || uploading}
+          onClick={() => fileInputRef.current?.click()}
+          title="上传文件"
+        >
+          <Upload className="h-3.5 w-3.5" />
         </Button>
         <Button
           size="sm"
@@ -383,6 +551,25 @@ export function FileManagerWidget({
       {error && (
         <div className="border-b border-red-900/40 bg-red-950/30 px-3 py-2 text-xs text-red-300">
           {error}
+        </div>
+      )}
+
+      {uploadState && (
+        <div className="border-b border-[var(--color-border)] px-3 py-2">
+          <div className="flex items-center justify-between gap-2 text-[11px]">
+            <span className="truncate">正在上传 {uploadState.name}</span>
+            <span className="shrink-0 text-[var(--color-muted-foreground)]">
+              {formatUploadProgress(uploadState.loaded, uploadState.total)}
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 bg-[var(--color-secondary)]">
+            <div
+              className="h-full bg-[var(--color-primary)] transition-all"
+              style={{
+                width: `${uploadState.total > 0 ? Math.min(100, (uploadState.loaded / uploadState.total) * 100) : 0}%`,
+              }}
+            />
+          </div>
         </div>
       )}
 
@@ -456,8 +643,20 @@ export function FileManagerWidget({
       </div>
 
       <div className="border-t border-[var(--color-border)] px-3 py-1.5 text-[11px] text-[var(--color-muted-foreground)]">
-        {ready ? `${remotePath} · ${sortedEntries.length} 项` : "正在连接 SFTP..."}
+        {ready
+          ? uploading
+            ? `${remotePath} · 上传中`
+            : `${remotePath} · ${sortedEntries.length} 项 · 拖拽文件到此处上传`
+          : "正在连接 SFTP..."}
       </div>
+
+      {dragActive && ready && !uploading && (
+        <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center border-2 border-dashed border-[var(--color-primary)] bg-[var(--color-background)]/80">
+          <div className="rounded-sm bg-[var(--color-card)] px-4 py-3 text-sm shadow-lg">
+            释放以上传到 {remotePath}
+          </div>
+        </div>
+      )}
 
       <ContextMenu
         open={menu !== null}

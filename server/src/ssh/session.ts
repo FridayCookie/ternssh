@@ -1331,9 +1331,6 @@ export class SSHSession {
           this.sendDebug(`Non-shell channel EOF: channelID=${channelID}`);
           if (this.sftpHandler && channelID === this.sftpHandler.getChannelID()) {
             this.sftpHandler.onChannelEof();
-            this.sftpHandler.dispose();
-            this.sftpHandler = null;
-            this.channels.delete(channelID);
           }
         }
         break;
@@ -1351,14 +1348,11 @@ export class SSHSession {
           } else {
             this.channels.delete(channelID);
           }
+        } else if (this.sftpHandler && channelID === this.sftpHandler.getChannelID()) {
+          this.sftpHandler.onChannelClosed();
         } else {
-          // Other channel (SFTP etc.) closed - clean up that channel only
           this.sendDebug(`Non-shell channel closed: channelID=${channelID}`);
           this.channels.delete(channelID);
-          if (this.sftpHandler && channelID === this.sftpHandler.getChannelID()) {
-            this.sftpHandler.onChannelClosed();
-            this.sftpHandler = null;
-          }
         }
         break;
       }
@@ -1467,9 +1461,12 @@ export class SSHSession {
     }
 
     const chunk = new Uint8Array(data);
-    void this.sftpHandler.onUploadChunk(chunk).catch((error) => {
-      const errMsg = error instanceof Error ? error.message : String(error);
-      this.sendDebug(`SFTP upload chunk ERROR: ${errMsg}`);
+    this.enqueueSFTPTask('upload', async () => {
+      if (!this.sftpHandler) {
+        this.sendSFTPError('upload', 'SFTP 未初始化');
+        return;
+      }
+      await this.sftpHandler.onUploadChunk(chunk);
     });
   }
 
@@ -1560,7 +1557,8 @@ export class SSHSession {
       (message: string) => {
         this.sendDebug(message);
       },
-      this.debugMode
+      this.debugMode,
+      () => this.finalizeSftpHandler(),
     );
 
     const openMsg = sftpChannel.buildOpenSession(channelID);
@@ -1656,9 +1654,16 @@ export class SSHSession {
       void this.sendEncrypted(eof).then(() => this.sendEncrypted(close)).catch(() => {});
     }
 
-    this.channels.delete(channelID);
+    this.finalizeSftpHandler();
+  }
+
+  private finalizeSftpHandler(): void {
+    if (!this.sftpHandler) return;
+
+    const channelID = this.sftpHandler.getChannelID();
     this.sftpHandler.dispose();
     this.sftpHandler = null;
+    this.channels.delete(channelID);
   }
 
   private enqueueChannelData(data: Uint8Array): void {

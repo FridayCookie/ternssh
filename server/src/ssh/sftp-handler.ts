@@ -23,12 +23,14 @@ const DOWNLOAD_CHUNK_SIZE = 128 * 1024;
 const DOWNLOAD_CONCURRENCY = 8;
 const DOWNLOAD_PROGRESS_CHUNKS = 8;
 const UPLOAD_PROGRESS_CHUNKS = 8;
+const SFTP_WRITE_MAX = 32 * 1024;
 const MAX_SFTP_FILE_SIZE = 500 * 1024 * 1024; // 500MB limit
 
 type SendEncryptedFn = (payload: Uint8Array) => Promise<void>;
 type SendJSONFn = (msg: any) => void;
 type SendBinaryFn = (data: Uint8Array) => void;
 type SendDebugFn = (message: string) => void;
+type OnSftpTerminatedFn = () => void;
 type SFTPOperation = 'init' | 'list' | 'stat' | 'download' | 'upload' | 'delete' | 'rename' | 'mkdir' | 'rmdir';
 
 export class SFTPHandler {
@@ -55,6 +57,8 @@ export class SFTPHandler {
   private uploadPath: string = '';
   private uploadWritePromises: Set<Promise<void>> = new Set();
   private uploadError: Error | null = null;
+  private channelLost = false;
+  private onTerminated?: OnSftpTerminatedFn;
 
   // SFTP channel data send (wraps SFTP packets in CHANNEL_DATA)
   private channelDataSend = (data: Uint8Array): void => {
@@ -122,6 +126,7 @@ export class SFTPHandler {
     sendBinary: SendBinaryFn,
     sendDebug: SendDebugFn,
     debugEnabled: boolean = false,
+    onTerminated?: OnSftpTerminatedFn,
   ) {
     this.channelID = channelID;
     this.channel = channel;
@@ -131,9 +136,29 @@ export class SFTPHandler {
     this.sendBinary = sendBinary;
     this.sendDebug = sendDebug;
     this.debugEnabled = debugEnabled;
+    this.onTerminated = onTerminated;
 
     this.sftp.setSendCallback(this.channelDataSend);
     this.sftp.setDebugCallback(sendDebug, debugEnabled);
+  }
+
+  isUploadActive(): boolean {
+    return this.uploadHandle !== null;
+  }
+
+  private markChannelLost(): void {
+    this.ready = false;
+    this.channelLost = true;
+    this.sendJSON({ type: 'sftp_reset' });
+    if (!this.isUploadActive()) {
+      this.finishIfChannelLost();
+    }
+  }
+
+  private finishIfChannelLost(): void {
+    if (!this.channelLost) return;
+    this.channelLost = false;
+    this.onTerminated?.();
   }
 
   getChannelID(): number {
@@ -249,13 +274,11 @@ export class SFTPHandler {
   }
 
   onChannelEof(): void {
-    this.ready = false;
-    this.sendJSON({ type: 'sftp_closed', message: 'SFTP 通道已关闭' });
+    this.markChannelLost();
   }
 
   onChannelClosed(): void {
-    this.ready = false;
-    this.sendJSON({ type: 'sftp_closed', message: 'SFTP 通道已关闭' });
+    this.markChannelLost();
   }
 
   onWindowAdjust(): void {
@@ -594,8 +617,7 @@ export class SFTPHandler {
   // Handle upload chunk (binary data from frontend)
   async onUploadChunk(data: Uint8Array): Promise<void> {
     if (!this.uploadHandle) {
-      this.sendError('upload', '上传未初始化');
-      return;
+      throw new Error('上传未初始化');
     }
 
     if (this.uploadError) {
@@ -603,37 +625,53 @@ export class SFTPHandler {
     }
 
     const handle = this.uploadHandle;
-    const writeOffset = this.uploadOffset;
-    this.uploadOffset += data.length;
+    let sourceOffset = 0;
 
-    const writePromise = (async () => {
-      const resp = await this.sftp.writeFile(handle, writeOffset, data);
-      const type = resp[0];
+    while (sourceOffset < data.length) {
+      const pieceLength = Math.min(SFTP_WRITE_MAX, data.length - sourceOffset);
+      const piece = data.subarray(sourceOffset, sourceOffset + pieceLength);
+      const writeOffset = this.uploadOffset;
+      this.uploadOffset += pieceLength;
 
-      if (type === SSH_FXP_STATUS) {
-        const status = this.sftp.parseStatusResponse(resp);
-        if (status.code !== SSH_FX_OK) {
-          throw new Error(status.message);
+      const writePromise = (async () => {
+        const resp = await this.sftp.writeFile(handle, writeOffset, piece);
+        const type = resp[0];
+
+        if (type === SSH_FXP_STATUS) {
+          const status = this.sftp.parseStatusResponse(resp);
+          if (status.code !== SSH_FX_OK) {
+            throw new Error(status.message);
+          }
+        } else {
+          throw new Error('SFTP 写入响应异常');
         }
-      }
 
-      this.uploadBytesWritten += data.length;
-      this.uploadChunksSinceProgress++;
+        this.uploadBytesWritten += pieceLength;
+        this.uploadChunksSinceProgress++;
 
-      if (
-        this.uploadTotalSize > 0 &&
-        (this.uploadChunksSinceProgress >= UPLOAD_PROGRESS_CHUNKS || this.uploadBytesWritten >= this.uploadTotalSize)
-      ) {
-        this.sendJSON({
-          type: 'sftp_upload_progress',
-          loaded: this.uploadBytesWritten,
-          total: this.uploadTotalSize,
-        });
-        this.uploadChunksSinceProgress = 0;
-      }
-    })();
+        if (
+          this.uploadTotalSize > 0 &&
+          (this.uploadChunksSinceProgress >= UPLOAD_PROGRESS_CHUNKS ||
+            this.uploadBytesWritten >= this.uploadTotalSize)
+        ) {
+          this.sendJSON({
+            type: 'sftp_upload_progress',
+            loaded: this.uploadBytesWritten,
+            total: this.uploadTotalSize,
+          });
+          this.uploadChunksSinceProgress = 0;
+        }
+      })();
 
-    await this.trackUploadWrite(writePromise);
+      await this.trackUploadWrite(writePromise);
+      sourceOffset += pieceLength;
+    }
+
+    this.sendJSON({
+      type: 'sftp_upload_chunk_ack',
+      loaded: this.uploadBytesWritten,
+      total: this.uploadTotalSize,
+    });
   }
 
   // Finish upload
@@ -647,6 +685,15 @@ export class SFTPHandler {
     if (error) {
       await this.removeIncompleteUpload();
       this.sendError('upload', '上传失败: ' + error.message);
+    } else if (
+      this.uploadTotalSize > 0 &&
+      this.uploadBytesWritten !== this.uploadTotalSize
+    ) {
+      await this.removeIncompleteUpload();
+      this.sendError(
+        'upload',
+        `上传大小不匹配 (${this.uploadBytesWritten}/${this.uploadTotalSize})`,
+      );
     } else {
       if (this.uploadTotalSize > 0 && this.uploadChunksSinceProgress > 0) {
         this.sendJSON({
@@ -663,9 +710,8 @@ export class SFTPHandler {
     }
 
     this.resetUploadState();
+    this.finishIfChannelLost();
   }
-
-  // Cancel upload
   async uploadCancel(): Promise<void> {
     try {
       await this.drainUploadWrites();
@@ -678,9 +724,8 @@ export class SFTPHandler {
     this.resetUploadState();
 
     this.sendJSON({ type: 'sftp_upload_cancelled' });
+    this.finishIfChannelLost();
   }
-
-  // Delete file
   async deletePath(path: string): Promise<void> {
     if (!this.ready) {
       this.sendError('delete', 'SFTP 未就绪');
