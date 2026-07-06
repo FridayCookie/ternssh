@@ -15,7 +15,7 @@ import {
 import { WorkspaceHeader } from "@/components/WorkspaceHeader";
 import { useI18n } from "@/i18n";
 import { usePersonalization } from "@/theme";
-import { parseStatusWidgetConfig } from "@/lib/status-widget-config";
+import { parseStatusWidgetConfig, DEFAULT_PROCESS_LIMIT } from "@/lib/status-widget-config";
 import { ServerListWidget } from "@/widgets/ServerListWidget";
 import { FileManagerWidget } from "@/widgets/FileManagerWidget";
 import { QuickCommandsWidget } from "@/widgets/QuickCommandsWidget";
@@ -1019,12 +1019,14 @@ export function DashboardView() {
           }
 
           if (widget.type === "process") {
+            const processConfig = parseStatusWidgetConfig(widget.config_json);
             return (
               <ProcessStatusWidget
                 activeServerId={activeServerId}
                 activeSessionId={activeSessionId}
-                pollIntervalMs={
-                  parseStatusWidgetConfig(widget.config_json).pollIntervalMs
+                pollIntervalMs={processConfig.pollIntervalMs}
+                processLimit={
+                  processConfig.processLimit ?? DEFAULT_PROCESS_LIMIT
                 }
                 sessions={sessions}
                 tree={tree}
@@ -1141,6 +1143,11 @@ export function DashboardView() {
             if (type === "process") return "process.settingsTitle";
             return "status.settingsTitle";
           })()
+        }
+        showProcessLimit={
+          dashboard.widgets.find(
+            (widget) => widget.id === pollSettingsWidgetId,
+          )?.type === "process"
         }
         open={pollSettingsWidgetId !== null}
         onOpenChange={(open) => {

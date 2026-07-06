@@ -1,11 +1,12 @@
 import { DurableObject } from "cloudflare:workers";
 import { getCredentialValue, getServer } from "../db/servers";
 import {
+  buildStatusCommand,
   computeCpuUsage,
   computeInterfaceNetRates,
   computeNetRates,
+  parseProcessLimitParam,
   parseStatusOutput,
-  STATUS_COMMAND,
 } from "../lib/server-status";
 import { connectToHost } from "../lib/resolve-host";
 import { SSHSession } from "../ssh/session";
@@ -53,7 +54,7 @@ export class SshSession extends DurableObject<Env> {
     }
 
     if (parsed.channel === "status") {
-      return this.handleStatus(session);
+      return this.handleStatus(session, request);
     }
 
     const upgradeHeader = request.headers.get("Upgrade");
@@ -151,7 +152,13 @@ export class SshSession extends DurableObject<Env> {
     }
   }
 
-  private async handleStatus(session: SessionRow): Promise<Response> {
+  private async handleStatus(
+    session: SessionRow,
+    request: Request,
+  ): Promise<Response> {
+    const processLimit = parseProcessLimitParam(
+      new URL(request.url).searchParams.get("processLimit"),
+    );
     const deadline = Date.now() + 30_000;
 
     while (Date.now() < deadline) {
@@ -175,7 +182,7 @@ export class SshSession extends DurableObject<Env> {
             throw new Error("状态采集连接未就绪");
           }
 
-          const result = await this.collectStatusMetrics(config);
+          const result = await this.collectStatusMetrics(config, processLimit);
           const parsed = parseStatusOutput(result.stdout);
           const now = Date.now();
           const { netRxRate, netTxRate, sample } = computeNetRates(
@@ -343,10 +350,14 @@ export class SshSession extends DurableObject<Env> {
     );
   }
 
-  private async collectStatusMetrics(config: SSHConnectionConfig) {
+  private async collectStatusMetrics(
+    config: SSHConnectionConfig,
+    processLimit: number,
+  ) {
+    const statusCommand = buildStatusCommand(processLimit);
     const run = async () => {
       try {
-        return await this.statusSession!.execCommand(STATUS_COMMAND, 12000);
+        return await this.statusSession!.execCommand(statusCommand, 12000);
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         if (!this.isRetriableStatusError(message)) {
@@ -358,7 +369,7 @@ export class SshSession extends DurableObject<Env> {
         if (!this.statusSession?.isSSHReady()) {
           throw new Error("状态采集连接未就绪");
         }
-        return await this.statusSession!.execCommand(STATUS_COMMAND, 12000);
+        return await this.statusSession!.execCommand(statusCommand, 12000);
       }
     };
 

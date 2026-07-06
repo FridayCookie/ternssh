@@ -51,22 +51,51 @@ export interface ProcessMetrics {
   command: string;
 }
 
-const STATUS_SCRIPT = [
-  'echo "LOAD:$(cut -d" " -f1-3 /proc/loadavg 2>/dev/null)"',
-  'echo "CPU:$(awk \'/^cpu / {print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6; exit}\' /proc/stat 2>/dev/null)"',
-  'MT=$(awk \'/MemTotal/ {print $2; exit}\' /proc/meminfo 2>/dev/null); MA=$(awk \'/MemAvailable/ {print $2; exit}\' /proc/meminfo 2>/dev/null); [ -n "$MA" ] || MA=$(awk \'/MemFree/ {print $2; exit}\' /proc/meminfo 2>/dev/null); echo "MEM:${MT} ${MA}"',
-  'echo "DISK:$(df -Pk / 2>/dev/null | awk \'NR==2 {print $2, $3, $4; exit}\')"',
-  'echo "NET:$(awk \'$1 ~ /:/ {gsub(/:/,"",$1); if ($1!="lo") {rx+=$2; tx+=$10}} END {print rx, tx}\' /proc/net/dev 2>/dev/null)"',
-  'awk \'$1 ~ /:/ {gsub(/:/,"",$1); if ($1!="lo") print "IF:"$1" "$2" "$10}\' /proc/net/dev 2>/dev/null',
-  'echo "UPTIME:$(cut -d" " -f1 /proc/uptime 2>/dev/null)"',
-  'echo "OS:$(uname -sr 2>/dev/null)"',
-  'echo "PROCCNT:$(ps -eo pid= 2>/dev/null | wc -l | tr -d " ")"',
-  'ps aux --sort=-%cpu 2>/dev/null | awk \'NR>1 && NR<=11 {name=$11; for(i=12;i<=NF;i++) name=name" "$i; if(length(name)>48) name=substr(name,1,48); gsub(/\\|/,"/",name); print "PROC:"$2"|"$1"|"$3"|"$4"|"$6"|"$8"|"name}\'',
-].join("; ");
+export const DEFAULT_PROCESS_LIMIT = 10;
+export const MIN_PROCESS_LIMIT = 1;
+export const MAX_PROCESS_LIMIT = 50;
+
+function clampProcessLimit(value: number): number {
+  return Math.min(
+    MAX_PROCESS_LIMIT,
+    Math.max(MIN_PROCESS_LIMIT, Math.round(value)),
+  );
+}
+
+export function parseProcessLimitParam(
+  value: string | null | undefined,
+): number {
+  if (!value) return DEFAULT_PROCESS_LIMIT;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return DEFAULT_PROCESS_LIMIT;
+  return clampProcessLimit(parsed);
+}
+
+function buildProcessListCommand(processLimit: number): string {
+  const limit = clampProcessLimit(processLimit);
+  return `ps aux --sort=-%cpu 2>/dev/null | awk 'NR>1 && NR<=${limit + 1} {name=$11; for(i=12;i<=NF;i++) name=name" "$i; if(length(name)>48) name=substr(name,1,48); gsub(/\\|/,"/",name); print "PROC:"$2"|"$1"|"$3"|"$4"|"$6"|"$8"|"name}'`;
+}
+
+export function buildStatusCommand(
+  processLimit = DEFAULT_PROCESS_LIMIT,
+): string {
+  return [
+    'echo "LOAD:$(cut -d" " -f1-3 /proc/loadavg 2>/dev/null)"',
+    'echo "CPU:$(awk \'/^cpu / {print $2+$3+$4+$5+$6+$7+$8+$9, $5+$6; exit}\' /proc/stat 2>/dev/null)"',
+    'MT=$(awk \'/MemTotal/ {print $2; exit}\' /proc/meminfo 2>/dev/null); MA=$(awk \'/MemAvailable/ {print $2; exit}\' /proc/meminfo 2>/dev/null); [ -n "$MA" ] || MA=$(awk \'/MemFree/ {print $2; exit}\' /proc/meminfo 2>/dev/null); echo "MEM:${MT} ${MA}"',
+    'echo "DISK:$(df -Pk / 2>/dev/null | awk \'NR==2 {print $2, $3, $4; exit}\')"',
+    'echo "NET:$(awk \'$1 ~ /:/ {gsub(/:/,"",$1); if ($1!="lo") {rx+=$2; tx+=$10}} END {print rx, tx}\' /proc/net/dev 2>/dev/null)"',
+    'awk \'$1 ~ /:/ {gsub(/:/,"",$1); if ($1!="lo") print "IF:"$1" "$2" "$10}\' /proc/net/dev 2>/dev/null',
+    'echo "UPTIME:$(cut -d" " -f1 /proc/uptime 2>/dev/null)"',
+    'echo "OS:$(uname -sr 2>/dev/null)"',
+    'echo "PROCCNT:$(ps -eo pid= 2>/dev/null | wc -l | tr -d " ")"',
+    buildProcessListCommand(processLimit),
+  ].join("; ");
+}
 
 // Run via a dedicated SSH exec channel (non-interactive). Do not nest `/bin/sh -c`
 // — nested shells break variable assignments like MT=$(awk ...) for memory collection.
-export const STATUS_COMMAND = STATUS_SCRIPT;
+export const STATUS_COMMAND = buildStatusCommand();
 
 function parseNumber(value: string | undefined): number | null {
   if (!value) return null;

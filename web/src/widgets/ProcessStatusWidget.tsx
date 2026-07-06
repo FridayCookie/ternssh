@@ -23,6 +23,7 @@ export interface ProcessStatusWidgetProps {
   sessions: Record<string, ServerSession>;
   tree: TreeNode[];
   pollIntervalMs: number;
+  processLimit: number;
 }
 
 function findServer(tree: TreeNode[], serverId: string): Server | null {
@@ -71,6 +72,7 @@ export function ProcessStatusWidget({
   sessions,
   tree,
   pollIntervalMs,
+  processLimit,
 }: ProcessStatusWidgetProps) {
   const t = useT();
   const session = activeServerId
@@ -94,7 +96,9 @@ export function ProcessStatusWidget({
     setLoading(true);
     setError(null);
     try {
-      const response = await api.getSessionStatus(session.sessionId);
+      const response = await api.getSessionStatus(session.sessionId, {
+        processLimit,
+      });
       if (!mountedRef.current) return;
       setMetrics(response.metrics);
       setUpdatedAt(response.collectedAt);
@@ -104,7 +108,7 @@ export function ProcessStatusWidget({
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, [session?.sessionId, session?.status, t]);
+  }, [processLimit, session?.sessionId, session?.status, t]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -122,7 +126,7 @@ export function ProcessStatusWidget({
     }, pollIntervalMs);
 
     return () => window.clearInterval(timer);
-  }, [fetchStatus, pollIntervalMs, session?.sessionId, session?.status]);
+  }, [fetchStatus, pollIntervalMs, processLimit, session?.sessionId, session?.status]);
 
   if (!session) {
     return (
@@ -181,7 +185,7 @@ export function ProcessStatusWidget({
       {isSessionAlive(session.status) && hasData && (
         <div className="min-h-0 flex-1 overflow-auto p-2">
           <div className="mb-2 text-[10px] text-[var(--color-muted-foreground)]">
-            {t("process.topByCpu")}
+            {t("process.topByCpu", { count: processLimit })}
           </div>
           <table className="w-full min-w-[520px] table-fixed text-[11px]">
             <thead className="sticky top-0 bg-[var(--color-card)] text-[var(--color-muted-foreground)]">

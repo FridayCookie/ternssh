@@ -250,6 +250,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ serverId }),
     }),
-  getSessionStatus: (sessionId: string) =>
-    request<SessionStatusResponse>(`/api/v1/sessions/${sessionId}/status`),
+  getSessionStatus: (
+    sessionId: string,
+    options?: { processLimit?: number },
+  ) => {
+    const params = new URLSearchParams();
+    if (options?.processLimit !== undefined) {
+      params.set("processLimit", String(options.processLimit));
+    }
+    const query = params.toString();
+    return request<SessionStatusResponse>(
+      `/api/v1/sessions/${sessionId}/status${query ? `?${query}` : ""}`,
+    );
+  },
 };
