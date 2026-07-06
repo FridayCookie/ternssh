@@ -859,7 +859,8 @@ export class SFTPHandler {
     }
 
     try {
-      const resp = await this.sftp.mkdir(path);
+      const targetPath = await this.resolveRemotePath(path);
+      const resp = await this.sftp.mkdir(targetPath);
       const type = resp[0];
 
       if (type === SSH_FXP_STATUS) {
@@ -870,7 +871,7 @@ export class SFTPHandler {
         }
       }
 
-      this.sendJSON({ type: 'sftp_mkdir_result', path, success: true });
+      this.sendJSON({ type: 'sftp_mkdir_result', path: targetPath, success: true });
     } catch (e) {
       this.sendError('mkdir', '创建目录失败: ' + (e instanceof Error ? e.message : String(e)));
     }
@@ -899,6 +900,41 @@ export class SFTPHandler {
     } catch (e) {
       this.sendError('rmdir', '删除目录失败: ' + (e instanceof Error ? e.message : String(e)));
     }
+  }
+
+  private async resolveRemotePath(path: string): Promise<string> {
+    const normalized = path.replace(/\\/g, '/');
+    if (normalized === '.' || normalized === '~' || normalized === '~/') {
+      return this.realpathSingle('.');
+    }
+
+    const slash = normalized.lastIndexOf('/');
+    if (slash < 0) {
+      const base = await this.realpathSingle('.');
+      return base.endsWith('/') ? `${base}${normalized}` : `${base}/${normalized}`;
+    }
+
+    const name = normalized.slice(slash + 1);
+    const parent = slash === 0 ? '/' : normalized.slice(0, slash);
+    const resolvedParent = await this.realpathSingle(parent || '.');
+    if (!name) return resolvedParent;
+    return resolvedParent.endsWith('/') ? `${resolvedParent}${name}` : `${resolvedParent}/${name}`;
+  }
+
+  private async realpathSingle(path: string): Promise<string> {
+    const resp = await this.sftp.realpath(path);
+    const type = resp[0];
+    if (type === SSH_FXP_NAME) {
+      const entries = this.sftp.parseNameResponse(resp);
+      if (entries.length > 0) {
+        return entries[0].filename;
+      }
+    }
+    if (type === SSH_FXP_STATUS) {
+      const status = this.sftp.parseStatusResponse(resp);
+      throw new Error(status.message);
+    }
+    return path;
   }
 
   // Format a directory entry for the frontend
