@@ -92,7 +92,29 @@ npm run dev:server
 
 ### 部署
 
-`wrangler.jsonc` 仅用于**本地开发**（`database_id: local-ternssh-db`）。生产部署使用 `wrangler.production.jsonc`（已加入 `.gitignore`，每人账号不同，勿提交仓库）。
+项目有两份 Wrangler 配置，用途不同：
+
+| 文件 | 用途 | D1 | 变量 |
+|------|------|-----|------|
+| `wrangler.jsonc` | 本地 `wrangler dev` | `local-ternssh-db` | 无（Access 等请在控制台配置） |
+| `wrangler.production.jsonc` | 生产部署（gitignore） | 真实远程 ID | 无 |
+
+#### 部署命令
+
+| 命令 | 场景 | 实际做了什么 |
+|------|------|--------------|
+| **`npm run deploy`** | Cloudflare 一键部署 / Builds 的 Deploy 步骤（自动检测） | 生成 production 配置 → D1 迁移 → `wrangler deploy --config wrangler.production.jsonc` |
+| **`npm run release`** | 本地一键（构建 + 发布） | `build` → `deploy` |
+| **`npm run cf:deploy`** | 同 `deploy`（兼容旧文档） | 同上 |
+| ~~`npx wrangler deploy`~~ | **不要用于生产** | 默认读 `wrangler.jsonc`，D1 为本地占位 ID，不含迁移步骤 |
+
+**结论：Cloudflare 一键部署会自动检测 `npm run build` + `npm run deploy`，直接接受即可。不要用裸的 `npx wrangler deploy`。**
+
+`npm run deploy` 与裸 `wrangler deploy` 的区别：
+
+1. **配置文件**：`wrangler.production.jsonc`（真实 D1 ID） vs `wrangler.jsonc`（本地开发）
+2. **D1 迁移**：自动执行 `migrations apply --remote` vs 无
+3. **控制台变量**：production 配置不含 `vars`，不会覆盖你在 Dashboard 设置的 `ACCESS_*`；裸 deploy 历史上容易把 `vars` 同步错（现已从 `wrangler.jsonc` 移除 `vars`，但仍缺 D1 ID 与迁移）
 
 **首次部署到 Cloudflare：**
 
@@ -112,33 +134,25 @@ export D1_DATABASE_ID=<上一步的 database_id>
 export CLOUDFLARE_ACCOUNT_ID=<可选，多账号时指定>
 
 # 3. 部署
-npm run deploy
+npm run release
 ```
 
-**Cloudflare Workers 构建（Git 连接）**：在 **Workers & Pages → 你的 Worker → Settings → Builds → Build variables** 中添加：
+**Cloudflare 一键部署 / Workers Builds（Git 连接）**：
 
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `D1_DATABASE_ID` | 是 | `wrangler d1 create ternssh` 输出的 UUID |
-| `CLOUDFLARE_ACCOUNT_ID` | 多账号时必填 | Cloudflare 账号 ID |
+Cloudflare 会自动检测 `package.json` 中的 `build` 与 `deploy` 脚本，预填为：
 
-构建 / 部署命令建议：
-
-| 步骤 | 命令 |
-|------|------|
+| 步骤 | 命令（自动检测） |
+|------|------------------|
 | Build command | `npm run build` |
-| Deploy command | `npm run cf:deploy` |
+| Deploy command | `npm run deploy` |
 
-> **不要用** `npx wrangler deploy` 作为 Deploy command。必须先运行 `generate-production-config.mjs` 把真实 D1 ID 写入 `wrangler.jsonc`。
+直接接受即可，无需改成 `npx wrangler deploy`。Build 阶段会 `postbuild` 生成 production 配置；Deploy 阶段跑迁移并发布。
 
-Deploy 脚本会自动查找账号下名为 `ternssh` 的 D1 数据库（与控制台绑定同名即可），也可手动设置 `D1_DATABASE_ID` 覆盖。
+D1 可自动发现（账号下名为 `ternssh` 的数据库），或在 Build variables 中设置 `D1_DATABASE_ID` / `CLOUDFLARE_ACCOUNT_ID`。
 
-> 若仓库中误提交了 `wrangler.production.jsonc`，请删除它（应仅保留在本地，已在 `.gitignore` 中）。
+Access 相关变量（`ACCESS_ENABLED`、`ACCESS_TEAM_DOMAIN`、`ACCESS_AUD`）**只在 Workers Dashboard → Variables and Secrets 配置**，不要写进 wrangler 配置文件。
 
-```bash
-npm run deploy
-# 等价于：构建前端 → 生成 wrangler.production.jsonc → 远程 D1 迁移 → wrangler deploy
-```
+> 若看到 Wrangler 警告「本地 ACCESS_ENABLED: false 将覆盖远程」，说明 Deploy command 误用了 `npx wrangler deploy`，请改回 `npm run deploy`。
 
 | 组件 | 平台 |
 |------|------|
@@ -236,7 +250,7 @@ docker run -d \
 | 认证 | 容器内默认为开放模式；Access 需额外配置 Workers 环境变量 |
 | 发布触发 | 推送 Git tag `v*` → [docker-publish.yml](.github/workflows/docker-publish.yml) 自动推送到 GHCR |
 
-> 生产环境若需全球边缘、托管 D1 与 Access 集成，请使用 `npm run deploy` 部署到 Cloudflare。
+> 生产环境若需全球边缘、托管 D1 与 Access 集成，请使用 `npm run release` 部署到 Cloudflare（或 Cloudflare 一键部署，自动检测 `build` + `deploy`）。
 
 ## 项目结构
 
@@ -405,7 +419,7 @@ npm run db:migrate         # 远程（deploy 已包含）
 
 ## 配置参考
 
-- **`wrangler.jsonc`** — 本地开发（`wrangler dev`），D1 使用 `local-ternssh-db`
+- **`wrangler.jsonc`** — 本地开发（`wrangler dev`）；**不含 `vars`**，Access 变量仅在控制台配置
 - **`wrangler.production.jsonc.example`** — 生产配置模板
 - **`wrangler.production.jsonc`** — 你的生产配置（gitignore，从模板复制或脚本生成）；**不含 `vars`/密钥**，避免部署覆盖控制台配置
 

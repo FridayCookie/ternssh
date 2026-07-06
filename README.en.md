@@ -92,7 +92,29 @@ npm run dev:server
 
 ### Deploy
 
-`wrangler.jsonc` is for **local development only** (`database_id: local-ternssh-db`). Production deploys use `wrangler.production.jsonc` (gitignored—each account has its own IDs; do not commit).
+Two Wrangler configs, different purposes:
+
+| File | Purpose | D1 | Vars |
+|------|---------|-----|------|
+| `wrangler.jsonc` | Local `wrangler dev` | `local-ternssh-db` | None (set Access in dashboard) |
+| `wrangler.production.jsonc` | Production deploy (gitignored) | Real remote ID | None |
+
+#### Deploy commands
+
+| Command | When | What it does |
+|---------|------|--------------|
+| **`npm run deploy`** | Cloudflare one-click / Builds Deploy step (auto-detected) | Generate production config → D1 migrate → `wrangler deploy --config wrangler.production.jsonc` |
+| **`npm run release`** | Local one-shot (build + publish) | `build` → `deploy` |
+| **`npm run cf:deploy`** | Same as `deploy` (legacy alias) | Same as above |
+| ~~`npx wrangler deploy`~~ | **Do not use in production** | Uses `wrangler.jsonc`, local D1 placeholder, no migrations |
+
+**Rule: Cloudflare one-click auto-detects `npm run build` + `npm run deploy` — accept as-is. Never bare `npx wrangler deploy`.**
+
+How `npm run deploy` differs from bare `wrangler deploy`:
+
+1. **Config file**: `wrangler.production.jsonc` (real D1 ID) vs `wrangler.jsonc` (local dev)
+2. **D1 migrations**: runs `migrations apply --remote` vs none
+3. **Dashboard vars**: production config has no `vars`, so `ACCESS_*` set in the dashboard are not overwritten
 
 **First deploy to Cloudflare:**
 
@@ -112,33 +134,25 @@ export D1_DATABASE_ID=<database_id from step 1>
 export CLOUDFLARE_ACCOUNT_ID=<optional, required with multiple accounts>
 
 # 3. Deploy
-npm run deploy
+npm run release
 ```
 
-**Cloudflare Workers Builds (Git)**: under **Workers & Pages → your Worker → Settings → Builds → Build variables**, add:
+**Cloudflare one-click deploy / Workers Builds (Git)**:
 
-| Variable | Required | Notes |
-|----------|----------|-------|
-| `D1_DATABASE_ID` | Yes | UUID from `wrangler d1 create ternssh` |
-| `CLOUDFLARE_ACCOUNT_ID` | If multiple accounts | Your Cloudflare account ID |
+Cloudflare auto-detects the `build` and `deploy` scripts in `package.json`:
 
-Recommended build / deploy commands:
-
-| Step | Command |
-|------|---------|
+| Step | Command (auto-detected) |
+|------|-------------------------|
 | Build command | `npm run build` |
-| Deploy command | `npm run cf:deploy` |
+| Deploy command | `npm run deploy` |
 
-> **Do not use** `npx wrangler deploy` as the Deploy command. Run `generate-production-config.mjs` first to inject the real D1 ID into `wrangler.jsonc`.
+Accept these as-is — do not switch to `npx wrangler deploy`. The build step runs `postbuild` to generate production config; the deploy step runs migrations and publishes.
 
-The deploy script auto-discovers a remote D1 database named `ternssh` on the connected account (same name as the dashboard binding). Set `D1_DATABASE_ID` to override.
+D1 is auto-discovered (database named `ternssh` on the account), or set `D1_DATABASE_ID` / `CLOUDFLARE_ACCOUNT_ID` in Build variables.
 
-> If `wrangler.production.jsonc` was accidentally committed, remove it from the repo (local only; listed in `.gitignore`).
+Configure Access (`ACCESS_ENABLED`, `ACCESS_TEAM_DOMAIN`, `ACCESS_AUD`) **only in Workers Dashboard → Variables and Secrets**, not in wrangler config files.
 
-```bash
-npm run deploy
-# build frontend → generate wrangler.production.jsonc → remote D1 migrate → wrangler deploy
-```
+> If Wrangler warns that local `ACCESS_ENABLED: false` will override remote settings, the Deploy command is using `npx wrangler deploy` — switch back to `npm run deploy`.
 
 | Component | Platform |
 |-----------|----------|
@@ -236,7 +250,7 @@ docker run -d \
 | Auth | Open mode by default in container; Access requires extra Workers env vars |
 | Publish trigger | Push Git tag `v*` → [docker-publish.yml](.github/workflows/docker-publish.yml) publishes to GHCR |
 
-> For global edge, managed D1, and Access integration in production, deploy to Cloudflare with `npm run deploy`.
+> For global edge, managed D1, and Access integration in production, deploy to Cloudflare with `npm run release` (or use Cloudflare one-click deploy, which auto-detects `build` + `deploy`).
 
 ## Project Structure
 
@@ -405,7 +419,7 @@ Reset all clears localStorage preferences and calls `POST /api/v1/me/reset` to w
 
 ## Configuration Reference
 
-- **`wrangler.jsonc`** — local development (`wrangler dev`), D1 uses `local-ternssh-db`
+- **`wrangler.jsonc`** — local development (`wrangler dev`); **no `vars`** — configure Access only in the dashboard
 - **`wrangler.production.jsonc.example`** — production config template
 - **`wrangler.production.jsonc`** — your production config (gitignored; copy from template or generate via script); **no `vars`/secrets** so deploys do not overwrite dashboard settings
 

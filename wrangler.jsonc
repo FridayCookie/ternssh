@@ -8,9 +8,6 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
-  "vars": {
-    "ACCESS_ENABLED": "false"
-  },
   "d1_databases": [
     {
       "binding": "DB",

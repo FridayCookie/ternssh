@@ -1,0 +1,3 @@
+# Optional local overrides for `wrangler dev`.
+# Copy to `.dev.vars` to test Access mode locally.
+ACCESS_ENABLED=false

@@ -140,61 +140,6 @@ function writeProductionFile(ids) {
   fs.writeFileSync(productionPath, content);
 }
 
-function stripManagedVarsFromProductionConfig() {
-  if (!fs.existsSync(productionPath)) return;
-
-  let content = fs.readFileSync(productionPath, "utf8");
-  const stripped = content.replace(
-    /\n\s*"vars"\s*:\s*\{[\s\S]*?\},/,
-    "",
-  );
-  if (stripped !== content) {
-    fs.writeFileSync(productionPath, stripped);
-  }
-}
-
-function patchWranglerJsonc(ids) {
-  let content = fs.readFileSync(basePath, "utf8");
-
-  if (!/"d1_databases"\s*:/.test(content)) {
-    throw new Error("wrangler.jsonc is missing d1_databases configuration.");
-  }
-
-  const currentIdMatch = content.match(/"database_id"\s*:\s*"([^"]*)"/);
-  const currentId = currentIdMatch?.[1];
-
-  if (currentId === ids.d1) {
-    return;
-  }
-
-  if (!currentIdMatch) {
-    throw new Error("wrangler.jsonc is missing database_id in d1_databases.");
-  }
-
-  content = content.replace(
-    /"database_id"\s*:\s*"[^"]*"/,
-    `"database_id": "${ids.d1}"`,
-  );
-
-  if (ids.account) {
-    if (/^\s*"account_id"/m.test(content)) {
-      content = content.replace(
-        /"account_id"\s*:\s*"[^"]*"/,
-        `"account_id": "${ids.account}"`,
-      );
-    } else {
-      content = content.replace(
-        /("name"\s*:\s*"ternssh",\n)/,
-        `$1  "account_id": "${ids.account}",\n`,
-      );
-    }
-  } else {
-    content = content.replace(/^\s*"account_id"\s*:\s*"[^"]*",\n/m, "");
-  }
-
-  fs.writeFileSync(basePath, content);
-}
-
 function printSetupHelp(databaseName) {
   console.error(
     [
@@ -203,13 +148,13 @@ function printSetupHelp(databaseName) {
       "Cloudflare Workers Builds:",
       "  1. Ensure a D1 database named \"" + databaseName + "\" exists on this account",
       "  2. Build command:  npm run build",
-      "  3. Deploy command: npm run cf:deploy",
+      "  3. Deploy command: npm run deploy",
       "",
       "Or set build environment variable:",
       "  D1_DATABASE_ID=<uuid from: wrangler d1 list>",
       "",
       "Local manual deploy:",
-      "  npm run deploy:config && edit wrangler.production.jsonc && npm run deploy",
+      "  npm run deploy:config && edit wrangler.production.jsonc && npm run release",
     ].join("\n"),
   );
 }
@@ -231,11 +176,5 @@ if (!ids) {
 }
 
 writeProductionFile(ids);
-stripManagedVarsFromProductionConfig();
-patchWranglerJsonc(ids);
 console.log(`Wrote ${path.relative(root, productionPath)}`);
-if (readIdsFromFile(basePath)?.d1 === ids.d1) {
-  console.log(`Production D1 binding (${ids.d1}) ready.`);
-} else {
-  console.log(`Applied production D1 binding (${ids.d1}) to wrangler.jsonc for deploy.`);
-}
+console.log(`Production D1 binding (${ids.d1}) ready for deploy.`);
