@@ -377,8 +377,10 @@ export const en: Messages = {
     dragResize: "Drag to resize",
   },
   onboarding: {
-    title: "Initial setup",
-    description: "Create an admin username and password to protect this instance.",
+    stepOf: "Step {current} of {total}",
+    next: "Next",
+    back: "Back",
+    continueToSetup: "Continue to account setup",
     username: "Username",
     password: "Password",
     confirmPassword: "Confirm password",
@@ -386,5 +388,36 @@ export const en: Messages = {
     submitting: "Setting up...",
     passwordMismatch: "Passwords do not match",
     setupFailed: "Setup failed, please try again",
+    steps: {
+      addWidget: {
+        title: "Add widgets",
+        description:
+          "Use the Add widget button in the header to add terminals, file manager, status monitors, and more to build your workspace.",
+      },
+      dragLayout: {
+        title: "Drag to arrange",
+        description:
+          "Drag a widget by its title bar to reposition it anywhere on the dashboard.",
+      },
+      resize: {
+        title: "Resize widgets",
+        description:
+          "Drag the handles on a widget's edges or corners to make it larger or smaller.",
+      },
+      fileUpload: {
+        title: "Drag to upload",
+        description:
+          "In the file manager, drag local files or folders into the list area to upload them to the remote server.",
+      },
+      contextMenu: {
+        title: "Right-click actions",
+        description:
+          "Right-click in the server list, file manager, and other areas for quick actions like create, delete, and rename.",
+      },
+      account: {
+        title: "Set up your account",
+        description: "Create an admin username and password to protect this instance.",
+      },
+    },
   },
 };

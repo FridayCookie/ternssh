@@ -366,8 +366,10 @@ export const zh = {
     dragResize: "拖拽缩放",
   },
   onboarding: {
-    title: "初始设置",
-    description: "请创建管理员账号和密码，用于保护此实例。",
+    stepOf: "第 {current} 步，共 {total} 步",
+    next: "下一步",
+    back: "上一步",
+    continueToSetup: "继续设置账号",
     username: "用户名",
     password: "密码",
     confirmPassword: "确认密码",
@@ -375,6 +377,37 @@ export const zh = {
     submitting: "设置中...",
     passwordMismatch: "两次输入的密码不一致",
     setupFailed: "设置失败，请重试",
+    steps: {
+      addWidget: {
+        title: "添加组件",
+        description:
+          "点击顶部栏的「添加组件」按钮，可以添加终端、文件管理、状态监控等组件，按需搭建工作区。",
+      },
+      dragLayout: {
+        title: "拖动排版",
+        description:
+          "按住组件标题栏拖动，可以自由调整组件在工作区中的位置。",
+      },
+      resize: {
+        title: "放大缩小",
+        description:
+          "拖动组件边缘或角落的手柄，可以放大或缩小组件尺寸。",
+      },
+      fileUpload: {
+        title: "拖拽上传",
+        description:
+          "在文件管理组件中，可将本地文件或文件夹拖拽到列表区域，上传至远程服务器。",
+      },
+      contextMenu: {
+        title: "右键操作",
+        description:
+          "在服务器列表、文件管理等区域点击右键，可快速执行新建、删除、重命名等操作。",
+      },
+      account: {
+        title: "设置账号密码",
+        description: "请创建管理员账号和密码，用于保护此实例。",
+      },
+    },
   },
 } as const;
 
