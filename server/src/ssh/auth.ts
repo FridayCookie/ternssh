@@ -186,9 +186,12 @@ export class SSHAuth {
         const methods = new TextDecoder().decode(
           payload.slice(5, 5 + len)
         );
+        const partialSuccess =
+          payload.length > 5 + len ? payload[5 + len] !== 0 : false;
         return {
           success: false,
-          allowedMethods: methods.split(','),
+          allowedMethods: methods.split(',').filter(Boolean),
+          partialSuccess,
         };
       }
 

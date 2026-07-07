@@ -1103,10 +1103,15 @@ export class SSHSession {
         }
         break;
 
-      case SSH_MSG_USERAUTH_FAILURE:
-        this.sendError('认证失败：用户名或密码错误');
+      case SSH_MSG_USERAUTH_FAILURE: {
+        if (this.config.authMethod === 'publickey') {
+          this.sendAuthError('ssh_publickey_rejected');
+        } else {
+          this.sendAuthError('ssh_password_rejected');
+        }
         this.close();
         break;
+      }
 
       case SSH_MSG_UNIMPLEMENTED:
         break;
@@ -1771,6 +1776,16 @@ export class SSHSession {
   private sendError(message: string): void {
     try {
       this.ws.send(JSON.stringify({ type: 'error', message }));
+    } catch (e) {
+      // WebSocket 已关闭，错误消息无法送达
+    }
+  }
+
+  private sendAuthError(
+    code: 'ssh_password_rejected' | 'ssh_publickey_rejected' | 'ssh_auth_failed',
+  ): void {
+    try {
+      this.ws.send(JSON.stringify({ type: 'error', code }));
     } catch (e) {
       // WebSocket 已关闭，错误消息无法送达
     }

@@ -132,6 +132,12 @@ export const en: Messages = {
     disconnected: "Connection closed.",
     wsFailed: "WebSocket connection failed.",
     connectFailed: "Connection failed",
+    passwordIncorrect:
+      "Incorrect SSH password. Check the password saved for this server.",
+    publicKeyAuthFailed:
+      "SSH private key authentication failed. Check the key saved for this server.",
+    authFailed:
+      "SSH authentication failed. Check the username, password, or private key.",
   },
   terminal: {
     emptyHint: "Select a server and connect to open a terminal.",

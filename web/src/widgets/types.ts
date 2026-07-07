@@ -38,6 +38,8 @@ export interface ServerListWidgetProps extends WidgetProps {
   onExpandedChange: Dispatch<SetStateAction<Set<string>>>;
 }
 
+export type SessionCloseReason = "auth_failed" | "disconnected";
+
 export interface TerminalWidgetProps {
   serverSessions: ServerSession[];
   activeServerId: string | null;
@@ -46,6 +48,6 @@ export interface TerminalWidgetProps {
   onAddTerminal: () => void;
   onCloseTerminal: (sessionId: string) => void;
   onSessionStatusChange: (sessionId: string, status: SessionStatus) => void;
-  onSessionClosed: (sessionId: string) => void;
+  onSessionClosed: (sessionId: string, reason?: SessionCloseReason) => void;
   onStatusChange?: (status: string) => void;
 }

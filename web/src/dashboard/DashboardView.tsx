@@ -23,6 +23,7 @@ import { StatusWidget } from "@/widgets/StatusWidget";
 import { NetworkStatusWidget } from "@/widgets/NetworkStatusWidget";
 import { ProcessStatusWidget } from "@/widgets/ProcessStatusWidget";
 import { TerminalWidget } from "@/widgets/TerminalWidget";
+import type { SessionCloseReason } from "@/widgets/types";
 import { AddGroupDialog } from "./AddGroupDialog";
 import { AddQuickCommandDialog } from "./AddQuickCommandDialog";
 import { AddServerDialog } from "./AddServerDialog";
@@ -309,7 +310,7 @@ export function DashboardView() {
   );
 
   const handleSessionClosed = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, reason?: SessionCloseReason) => {
       if (manualCloseSessionsRef.current.has(sessionId)) {
         manualCloseSessionsRef.current.delete(sessionId);
         return;
@@ -317,9 +318,13 @@ export function DashboardView() {
       const session = sessionsRef.current[sessionId];
       if (!session) return;
       if (manualDisconnectServersRef.current.has(session.serverId)) return;
+      if (reason === "auth_failed") {
+        clearReconnectState(sessionId);
+        return;
+      }
       scheduleReconnect(sessionId);
     },
-    [scheduleReconnect],
+    [clearReconnectState, scheduleReconnect],
   );
 
   const handleDisconnectServer = useCallback(

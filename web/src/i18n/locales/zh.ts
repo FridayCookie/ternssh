@@ -125,6 +125,9 @@ export const zh = {
     disconnected: "连接已断开。",
     wsFailed: "WebSocket 连接失败。",
     connectFailed: "连接失败",
+    passwordIncorrect: "SSH 密码错误，请检查服务器配置中的密码。",
+    publicKeyAuthFailed: "SSH 私钥认证失败，请检查服务器配置中的私钥。",
+    authFailed: "SSH 认证失败，请检查用户名、密码或私钥。",
   },
   terminal: {
     emptyHint: "选择服务器并连接以打开终端。",

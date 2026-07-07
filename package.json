@@ -4,7 +4,7 @@
   "license": "GPL-3.0-or-later",
   "scripts": {
     "postinstall": "npm install --prefix web && npm install --prefix server",
-    "dev:server": "wrangler dev",
+    "dev:server": "wrangler dev --ip 0.0.0.0",
     "dev:web": "npm run dev --prefix web",
     "build": "npm run build --prefix web",
     "postbuild": "node scripts/generate-production-config.mjs",

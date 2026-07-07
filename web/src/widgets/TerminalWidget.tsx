@@ -22,7 +22,7 @@ import {
   readTerminalPartialCommand,
 } from "@/lib/terminal-suggestions";
 import { cn } from "@/lib/utils";
-import type { TerminalWidgetProps } from "./types";
+import type { SessionCloseReason, TerminalWidgetProps } from "./types";
 import "@xterm/xterm/css/xterm.css";
 
 function decodeWsPayload(data: string | Blob | ArrayBuffer): string | Promise<string> {
@@ -36,18 +36,52 @@ function decodeWsPayload(data: string | Blob | ArrayBuffer): string | Promise<st
   return String(data);
 }
 
+function resolveSessionError(
+  code: string | undefined,
+  message: string | undefined,
+  t: (key: string) => string,
+): string {
+  switch (code) {
+    case "ssh_password_rejected":
+      return t("session.passwordIncorrect");
+    case "ssh_publickey_rejected":
+      return t("session.publicKeyAuthFailed");
+    case "ssh_auth_failed":
+      return t("session.authFailed");
+    default:
+      return message ?? t("session.connectFailed");
+  }
+}
+
+function isAuthFailureCode(code: string | undefined): boolean {
+  return (
+    code === "ssh_password_rejected" ||
+    code === "ssh_publickey_rejected" ||
+    code === "ssh_auth_failed"
+  );
+}
+
 function parseControlMessage(
   data: string,
   t: (key: string) => string,
 ): {
   kind: "ignore" | "error" | "ready";
   message?: string;
+  authFailed?: boolean;
 } | null {
   if (!data.startsWith("{")) return null;
   try {
-    const parsed = JSON.parse(data) as { type?: string; message?: string };
+    const parsed = JSON.parse(data) as {
+      type?: string;
+      code?: string;
+      message?: string;
+    };
     if (parsed.type === "error") {
-      return { kind: "error", message: parsed.message ?? t("session.connectFailed") };
+      return {
+        kind: "error",
+        message: resolveSessionError(parsed.code, parsed.message, t),
+        authFailed: isAuthFailureCode(parsed.code),
+      };
     }
     if (
       parsed.type === "status" &&
@@ -68,7 +102,7 @@ interface SessionPaneProps {
   session: ServerSession;
   active: boolean;
   onStatusChange: (status: ServerSession["status"]) => void;
-  onClosed: () => void;
+  onClosed: (reason?: SessionCloseReason) => void;
   t: (key: string, params?: Record<string, string | number>) => string;
   terminalColors: TerminalThemeColors;
 }
@@ -188,6 +222,7 @@ function SessionPane({
     }
 
     let disposed = false;
+    let closeReason: SessionCloseReason | undefined;
 
     const sendResize = () => {
       const fitAddon = fitAddonRef.current;
@@ -232,12 +267,14 @@ function SessionPane({
 
     ws.onclose = () => {
       if (disposed) return;
-      terminal.writeln(`\r\n${t("session.disconnected")}`);
-      onClosedRef.current();
+      if (closeReason !== "auth_failed") {
+        terminal.writeln(`\r\n${t("session.disconnected")}`);
+      }
+      onClosedRef.current(closeReason);
     };
 
     ws.onerror = () => {
-      if (disposed) return;
+      if (disposed || closeReason === "auth_failed") return;
       onStatusChangeRef.current("error");
       terminal.writeln(`\r\n${t("session.wsFailed")}`);
     };
@@ -256,6 +293,9 @@ function SessionPane({
           if (control.kind === "error") {
             onStatusChangeRef.current("error");
             terminal.writeln(`\r\n${control.message ?? t("session.connectFailed")}`);
+            if (control.authFailed) {
+              closeReason = "auth_failed";
+            }
             return;
           }
           if (control.kind === "ready" && !ready) {
@@ -488,7 +528,7 @@ export function TerminalWidget({
             terminalColors={resolvedTerminalColors}
             session={session}
             t={t}
-            onClosed={() => onSessionClosed(session.sessionId)}
+            onClosed={(reason) => onSessionClosed(session.sessionId, reason)}
             onStatusChange={(status) =>
               onSessionStatusChange(session.sessionId, status)
             }

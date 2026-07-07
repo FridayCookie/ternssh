@@ -37,6 +37,7 @@ export interface ECDHResult {
 export interface AuthResult {
   success: boolean;
   allowedMethods?: string[];
+  partialSuccess?: boolean;
 }
 
 export interface SSHConnectionConfig {
