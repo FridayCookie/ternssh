@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
-import { api, type Server, type TreeNode } from "@/lib/api";
+import { type Server, type TreeNode } from "@/lib/api";
 import {
   formatBytes,
   formatDuration,
   formatLoad,
-  type ServerStatusMetrics,
 } from "@/lib/server-status";
 import {
   getPrimarySessionForServer,
@@ -15,6 +13,7 @@ import {
   type ServerSession,
 } from "@/lib/sessions";
 import { formatPollIntervalLabel } from "@/lib/status-widget-config";
+import { useSessionStatus } from "@/lib/use-session-status";
 import { cn } from "@/lib/utils";
 import { MetricBar } from "@/widgets/shared/MetricBar";
 
@@ -51,53 +50,10 @@ export function StatusWidget({
     ? getPrimarySessionForServer(sessions, activeServerId, activeSessionId)
     : null;
   const server = activeServerId ? findServer(tree, activeServerId) : null;
-  const mountedRef = useRef(true);
-  const [metrics, setMetrics] = useState<ServerStatusMetrics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
-
-  const fetchStatus = useCallback(async () => {
-    if (!session || session.status !== "open") {
-      setMetrics(null);
-      setError(null);
-      setUpdatedAt(null);
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.getSessionStatus(session.sessionId);
-      if (!mountedRef.current) return;
-
-      setMetrics(response.metrics);
-      setUpdatedAt(response.collectedAt);
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : t("status.collectFailed"));
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
-  }, [session?.sessionId, session?.status, t]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    void fetchStatus();
-    if (!session || session.status !== "open") return;
-
-    const timer = window.setInterval(() => {
-      void fetchStatus();
-    }, pollIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [fetchStatus, pollIntervalMs, session?.sessionId, session?.status]);
+  const { metrics, updatedAt, error, loading, refresh } = useSessionStatus({
+    session,
+    pollIntervalMs,
+  });
 
   if (!session) {
     return (
@@ -128,7 +84,7 @@ export function StatusWidget({
           size="sm"
           variant="secondary"
           disabled={loading || !isSessionAlive(session.status)}
-          onClick={() => void fetchStatus()}
+          onClick={refresh}
           title={t("common.refresh")}
         >
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />

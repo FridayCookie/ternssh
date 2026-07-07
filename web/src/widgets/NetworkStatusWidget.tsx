@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useT } from "@/i18n";
-import { api, type Server, type TreeNode } from "@/lib/api";
+import { type Server, type TreeNode } from "@/lib/api";
 import {
   type NetInterfaceMetrics,
-  type ServerStatusMetrics,
 } from "@/lib/server-status";
 import {
   getPrimarySessionForServer,
@@ -17,6 +16,7 @@ import {
   formatPollIntervalLabel,
   getBandwidthMaxSlots,
 } from "@/lib/status-widget-config";
+import { useSessionStatus } from "@/lib/use-session-status";
 import { cn } from "@/lib/utils";
 import {
   NetworkBandwidthChart,
@@ -80,11 +80,10 @@ export function NetworkStatusWidget({
     ? getPrimarySessionForServer(sessions, activeServerId, activeSessionId)
     : null;
   const server = activeServerId ? findServer(tree, activeServerId) : null;
-  const mountedRef = useRef(true);
-  const [metrics, setMetrics] = useState<ServerStatusMetrics | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const { metrics, updatedAt, error, loading, refresh } = useSessionStatus({
+    session,
+    pollIntervalMs,
+  });
   const [histories, setHistories] = useState<Record<string, BandwidthSample[]>>(
     {},
   );
@@ -93,73 +92,41 @@ export function NetworkStatusWidget({
   );
   const maxBandwidthSlots = getBandwidthMaxSlots(pollIntervalMs);
 
-  const fetchStatus = useCallback(async () => {
-    if (!session || session.status !== "open") {
-      setMetrics(null);
-      setError(null);
-      setUpdatedAt(null);
-      setHistories({});
-      return;
-    }
-
-    setLoading(true);
-    setError(null);
-    try {
-      const response = await api.getSessionStatus(session.sessionId);
-      if (!mountedRef.current) return;
-
-      const at = Date.parse(response.collectedAt) || Date.now();
-      const nextMetrics = response.metrics;
-      setMetrics(nextMetrics);
-      setUpdatedAt(response.collectedAt);
-
-      setHistories((current) => {
-        const next = { ...current };
-
-        if (
-          nextMetrics.netRxRate !== null &&
-          nextMetrics.netTxRate !== null
-        ) {
-          next[TOTAL_INTERFACE_KEY] = appendHistorySample(
-            next[TOTAL_INTERFACE_KEY] ?? [],
-            {
-              rx: nextMetrics.netRxRate,
-              tx: nextMetrics.netTxRate,
-              at,
-            },
-          );
-        }
-
-        for (const iface of nextMetrics.netInterfaces ?? []) {
-          if (iface.rxRate === null || iface.txRate === null) continue;
-          next[iface.name] = appendHistorySample(next[iface.name] ?? [], {
-            rx: iface.rxRate,
-            tx: iface.txRate,
-            at,
-          });
-        }
-
-        return next;
-      });
-    } catch (err) {
-      if (!mountedRef.current) return;
-      setError(err instanceof Error ? err.message : t("status.collectFailed"));
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
-  }, [session?.sessionId, session?.status, t]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-    };
-  }, []);
-
   useEffect(() => {
     setHistories({});
     setSelectedInterface(TOTAL_INTERFACE_KEY);
   }, [session?.sessionId, pollIntervalMs]);
+
+  useEffect(() => {
+    if (!metrics || !updatedAt) return;
+
+    const at = Date.parse(updatedAt) || Date.now();
+    setHistories((current) => {
+      const next = { ...current };
+
+      if (metrics.netRxRate !== null && metrics.netTxRate !== null) {
+        next[TOTAL_INTERFACE_KEY] = appendHistorySample(
+          next[TOTAL_INTERFACE_KEY] ?? [],
+          {
+            rx: metrics.netRxRate,
+            tx: metrics.netTxRate,
+            at,
+          },
+        );
+      }
+
+      for (const iface of metrics.netInterfaces ?? []) {
+        if (iface.rxRate === null || iface.txRate === null) continue;
+        next[iface.name] = appendHistorySample(next[iface.name] ?? [], {
+          rx: iface.rxRate,
+          tx: iface.txRate,
+          at,
+        });
+      }
+
+      return next;
+    });
+  }, [metrics, updatedAt]);
 
   useEffect(() => {
     const keys = interfaceKeys(metrics?.netInterfaces ?? []);
@@ -167,17 +134,6 @@ export function NetworkStatusWidget({
       setSelectedInterface(TOTAL_INTERFACE_KEY);
     }
   }, [metrics?.netInterfaces, selectedInterface]);
-
-  useEffect(() => {
-    void fetchStatus();
-    if (!session || session.status !== "open") return;
-
-    const timer = window.setInterval(() => {
-      void fetchStatus();
-    }, pollIntervalMs);
-
-    return () => window.clearInterval(timer);
-  }, [fetchStatus, pollIntervalMs, session?.sessionId, session?.status]);
 
   const interfaces = metrics?.netInterfaces ?? [];
   const selectedRates =
@@ -227,7 +183,7 @@ export function NetworkStatusWidget({
           size="sm"
           variant="secondary"
           disabled={loading || !isSessionAlive(session.status)}
-          onClick={() => void fetchStatus()}
+          onClick={refresh}
           title={t("common.refresh")}
         >
           <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />

@@ -54,6 +54,16 @@ export interface ProcessMetrics {
 export const DEFAULT_PROCESS_LIMIT = 10;
 export const MIN_PROCESS_LIMIT = 1;
 export const MAX_PROCESS_LIMIT = 50;
+export const DEFAULT_STATUS_POLL_INTERVAL_MS = 5000;
+export const MIN_STATUS_POLL_INTERVAL_MS = 3000;
+export const MAX_STATUS_POLL_INTERVAL_MS = 60000;
+
+export function clampStatusPollIntervalMs(value: number): number {
+  return Math.min(
+    MAX_STATUS_POLL_INTERVAL_MS,
+    Math.max(MIN_STATUS_POLL_INTERVAL_MS, Math.round(value)),
+  );
+}
 
 function clampProcessLimit(value: number): number {
   return Math.min(

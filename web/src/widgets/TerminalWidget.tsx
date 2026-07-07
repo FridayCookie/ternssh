@@ -10,6 +10,10 @@ import {
   MAX_SESSION_RECONNECT_ATTEMPTS,
   type ServerSession,
 } from "@/lib/sessions";
+import {
+  dispatchSessionStatusMessage,
+  registerSessionStatusTransport,
+} from "@/lib/session-status-bridge";
 import { registerTerminalRunner } from "@/lib/terminal-bridge";
 import {
   completionSuffix,
@@ -216,6 +220,16 @@ function SessionPane({
       sendResize();
     };
 
+    const unregisterStatusTransport = registerSessionStatusTransport(
+      session.sessionId,
+      (payload) => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(payload);
+        }
+      },
+      () => ws.readyState === WebSocket.OPEN,
+    );
+
     ws.onclose = () => {
       if (disposed) return;
       terminal.writeln(`\r\n${t("session.disconnected")}`);
@@ -232,6 +246,11 @@ function SessionPane({
     ws.onmessage = (event) => {
       void (async () => {
         const data = await decodeWsPayload(event.data);
+        if (data.startsWith("{")) {
+          if (dispatchSessionStatusMessage(session.sessionId, data)) {
+            return;
+          }
+        }
         const control = parseControlMessage(data, t);
         if (control) {
           if (control.kind === "error") {
@@ -316,6 +335,7 @@ function SessionPane({
       disposed = true;
       onData.dispose();
       terminal.attachCustomKeyEventHandler(() => true);
+      unregisterStatusTransport();
       ws.close();
       wsRef.current = null;
       runCommandRef.current = () => false;

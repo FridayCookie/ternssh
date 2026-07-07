@@ -2,9 +2,13 @@ import { DurableObject } from "cloudflare:workers";
 import { getCredentialValue, getServer } from "../db/servers";
 import {
   buildStatusCommand,
+  clampStatusPollIntervalMs,
   computeCpuUsage,
   computeInterfaceNetRates,
   computeNetRates,
+  DEFAULT_PROCESS_LIMIT,
+  DEFAULT_STATUS_POLL_INTERVAL_MS,
+  MAX_STATUS_POLL_INTERVAL_MS,
   parseProcessLimitParam,
   parseStatusOutput,
 } from "../lib/server-status";
@@ -19,6 +23,17 @@ interface SessionRow {
   status: string;
 }
 
+interface StatusSubscription {
+  pollIntervalMs: number;
+  processLimit: number;
+}
+
+interface StatusPushPayload {
+  serverId: string;
+  collectedAt: string;
+  metrics: ReturnType<typeof parseStatusOutput>["metrics"];
+}
+
 export class SshSession extends DurableObject<Env> {
   private sshSession: SSHSession | null = null;
   private statusSession: SSHSession | null = null;
@@ -27,6 +42,8 @@ export class SshSession extends DurableObject<Env> {
   private bootstrapping: Promise<void> | null = null;
   private statusBootstrapping: Promise<void> | null = null;
   private connectionConfig: SSHConnectionConfig | null = null;
+  private activeSession: SessionRow | null = null;
+  private statusSubscriptions = new Map<string, StatusSubscription>();
   private lastNetSample: { rxBytes: number; txBytes: number; at: number } | null =
     null;
   private lastCpuSample: { total: number; idle: number; at: number } | null =
@@ -36,6 +53,7 @@ export class SshSession extends DurableObject<Env> {
     { rxBytes: number; txBytes: number; at: number }
   > | null = null;
   private statusCollectChain: Promise<void> = Promise.resolve();
+  private statusPushInFlight: Promise<void> | null = null;
 
   async fetch(request: Request): Promise<Response> {
     const parsed = parseRequestUrl(request.url);
@@ -104,11 +122,22 @@ export class SshSession extends DurableObject<Env> {
       rows: 40,
     };
 
+    this.activeSession = session;
     queueMicrotask(() => {
       void this.startTerminal(serverWs, config);
     });
 
     return new Response(null, { status: 101, webSocket: client });
+  }
+
+  async alarm(): Promise<void> {
+    if (this.statusSubscriptions.size === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    await this.collectAndPushStatus();
+    this.scheduleStatusAlarm();
   }
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -118,6 +147,9 @@ export class SshSession extends DurableObject<Env> {
     }
 
     if (ws === this.terminalWs) {
+      if (typeof message === "string" && this.handleTerminalStatusControl(message)) {
+        return;
+      }
       await this.sshSession?.handleWebSocketMessage(message);
     }
   }
@@ -136,6 +168,9 @@ export class SshSession extends DurableObject<Env> {
 
     if (ws === this.terminalWs) {
       this.terminalWs = null;
+      this.activeSession = null;
+      this.statusSubscriptions.clear();
+      void this.ctx.storage.deleteAlarm();
       this.sshSession?.close();
       this.sshSession = null;
       this.bootstrapping = null;
@@ -152,13 +187,175 @@ export class SshSession extends DurableObject<Env> {
     }
   }
 
-  private async handleStatus(
-    session: SessionRow,
-    request: Request,
-  ): Promise<Response> {
-    const processLimit = parseProcessLimitParam(
-      new URL(request.url).searchParams.get("processLimit"),
+  private handleTerminalStatusControl(message: string): boolean {
+    let parsed: {
+      type?: string;
+      id?: string;
+      pollIntervalMs?: number;
+      processLimit?: number;
+    };
+    try {
+      parsed = JSON.parse(message) as {
+        type?: string;
+        id?: string;
+        pollIntervalMs?: number;
+        processLimit?: number;
+      };
+    } catch {
+      return false;
+    }
+
+    if (!parsed?.type) return false;
+
+    if (parsed.type === "status_subscribe") {
+      if (typeof parsed.id !== "string" || !parsed.id) return true;
+      const pollIntervalMs =
+        typeof parsed.pollIntervalMs === "number"
+          ? clampStatusPollIntervalMs(parsed.pollIntervalMs)
+          : DEFAULT_STATUS_POLL_INTERVAL_MS;
+      const processLimit = parseProcessLimitParam(
+        parsed.processLimit === undefined
+          ? null
+          : String(parsed.processLimit),
+      );
+      this.statusSubscriptions.set(parsed.id, {
+        pollIntervalMs,
+        processLimit,
+      });
+      void this.onStatusSubscriptionsChanged(true);
+      return true;
+    }
+
+    if (parsed.type === "status_unsubscribe") {
+      if (typeof parsed.id === "string" && parsed.id) {
+        this.statusSubscriptions.delete(parsed.id);
+      }
+      void this.onStatusSubscriptionsChanged(false);
+      return true;
+    }
+
+    if (parsed.type === "status_refresh") {
+      void this.collectAndPushStatus();
+      return true;
+    }
+
+    return false;
+  }
+
+  private getEffectivePollIntervalMs(): number {
+    if (this.statusSubscriptions.size === 0) {
+      return DEFAULT_STATUS_POLL_INTERVAL_MS;
+    }
+
+    let minInterval = MAX_STATUS_POLL_INTERVAL_MS;
+    for (const subscription of this.statusSubscriptions.values()) {
+      minInterval = Math.min(minInterval, subscription.pollIntervalMs);
+    }
+    return minInterval;
+  }
+
+  private getEffectiveProcessLimit(): number {
+    let maxLimit = DEFAULT_PROCESS_LIMIT;
+    for (const subscription of this.statusSubscriptions.values()) {
+      maxLimit = Math.max(maxLimit, subscription.processLimit);
+    }
+    return maxLimit;
+  }
+
+  private scheduleStatusAlarm(): void {
+    if (this.statusSubscriptions.size === 0) {
+      void this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    void this.ctx.storage.setAlarm(
+      Date.now() + this.getEffectivePollIntervalMs(),
     );
+  }
+
+  private async onStatusSubscriptionsChanged(immediate: boolean): Promise<void> {
+    if (this.statusSubscriptions.size === 0) {
+      await this.ctx.storage.deleteAlarm();
+      return;
+    }
+
+    this.scheduleStatusAlarm();
+    if (immediate) {
+      await this.collectAndPushStatus();
+    }
+  }
+
+  private pushStatusPayload(payload: StatusPushPayload): void {
+    if (!this.terminalWs || this.terminalWs.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    try {
+      this.terminalWs.send(
+        JSON.stringify({
+          type: "metrics",
+          serverId: payload.serverId,
+          collectedAt: payload.collectedAt,
+          metrics: payload.metrics,
+        }),
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  private pushStatusError(message: string): void {
+    if (!this.terminalWs || this.terminalWs.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    try {
+      this.terminalWs.send(
+        JSON.stringify({
+          type: "metrics_error",
+          message,
+        }),
+      );
+    } catch {
+      // ignore
+    }
+  }
+
+  private async collectAndPushStatus(): Promise<void> {
+    if (this.statusSubscriptions.size === 0) return;
+
+    const run = async () => {
+      const session = this.activeSession;
+      if (!session) {
+        this.pushStatusError("请先连接终端会话");
+        return;
+      }
+
+      try {
+        const payload = await this.gatherStatusPayload(
+          session,
+          this.getEffectiveProcessLimit(),
+        );
+        this.pushStatusPayload(payload);
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Status collection failed";
+        this.pushStatusError(message);
+      }
+    };
+
+    const next = (this.statusPushInFlight ?? Promise.resolve()).then(run);
+    this.statusPushInFlight = next.then(
+      () => {},
+      () => {},
+    );
+    await next;
+  }
+
+  private async gatherStatusPayload(
+    session: SessionRow,
+    processLimit: number,
+  ): Promise<StatusPushPayload> {
     const deadline = Date.now() + 30_000;
 
     while (Date.now() < deadline) {
@@ -171,72 +368,85 @@ export class SshSession extends DurableObject<Env> {
       }
 
       if (this.sshSession?.isSSHReady()) {
-        try {
-          const config = await this.resolveConnectionConfig(session);
-          if (!config) {
-            return Response.json({ error: "服务器配置不存在" }, { status: 404 });
-          }
-
-          await this.ensureStatusSession(config);
-          if (!this.statusSession?.isSSHReady()) {
-            throw new Error("状态采集连接未就绪");
-          }
-
-          const result = await this.collectStatusMetrics(config, processLimit);
-          const parsed = parseStatusOutput(result.stdout);
-          const now = Date.now();
-          const { netRxRate, netTxRate, sample } = computeNetRates(
-            parsed.netRxBytes,
-            parsed.netTxBytes,
-            this.lastNetSample,
-            now,
-          );
-          if (sample) {
-            this.lastNetSample = sample;
-          }
-          const { cpuUsedPercent, sample: cpuSample } = computeCpuUsage(
-            parsed.cpuTotalJiffies,
-            parsed.cpuIdleJiffies,
-            this.lastCpuSample,
-            now,
-          );
-          if (cpuSample) {
-            this.lastCpuSample = cpuSample;
-          }
-          const { interfaces: netInterfaces, samples: netInterfaceSamples } =
-            computeInterfaceNetRates(
-              parsed.netInterfaces,
-              this.lastNetInterfaceSamples,
-              now,
-            );
-          this.lastNetInterfaceSamples = netInterfaceSamples;
-          parsed.metrics.netRxRate = netRxRate;
-          parsed.metrics.netTxRate = netTxRate;
-          parsed.metrics.cpuUsedPercent = cpuUsedPercent;
-          parsed.metrics.netInterfaces = netInterfaces;
-          return Response.json({
-            serverId: session.server_id,
-            collectedAt: new Date(now).toISOString(),
-            metrics: parsed.metrics,
-          });
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : "Status collection failed";
-          return Response.json({ error: message }, { status: 500 });
+        const config = await this.resolveConnectionConfig(session);
+        if (!config) {
+          throw new Error("服务器配置不存在");
         }
+
+        await this.ensureStatusSession(config);
+        if (!this.statusSession?.isSSHReady()) {
+          throw new Error("状态采集连接未就绪");
+        }
+
+        const result = await this.collectStatusMetrics(config, processLimit);
+        const parsed = parseStatusOutput(result.stdout);
+        const now = Date.now();
+        const { netRxRate, netTxRate, sample } = computeNetRates(
+          parsed.netRxBytes,
+          parsed.netTxBytes,
+          this.lastNetSample,
+          now,
+        );
+        if (sample) {
+          this.lastNetSample = sample;
+        }
+        const { cpuUsedPercent, sample: cpuSample } = computeCpuUsage(
+          parsed.cpuTotalJiffies,
+          parsed.cpuIdleJiffies,
+          this.lastCpuSample,
+          now,
+        );
+        if (cpuSample) {
+          this.lastCpuSample = cpuSample;
+        }
+        const { interfaces: netInterfaces, samples: netInterfaceSamples } =
+          computeInterfaceNetRates(
+            parsed.netInterfaces,
+            this.lastNetInterfaceSamples,
+            now,
+          );
+        this.lastNetInterfaceSamples = netInterfaceSamples;
+        parsed.metrics.netRxRate = netRxRate;
+        parsed.metrics.netTxRate = netTxRate;
+        parsed.metrics.cpuUsedPercent = cpuUsedPercent;
+        parsed.metrics.netInterfaces = netInterfaces;
+
+        return {
+          serverId: session.server_id,
+          collectedAt: new Date(now).toISOString(),
+          metrics: parsed.metrics,
+        };
       }
 
       await new Promise((resolve) => setTimeout(resolve, 200));
     }
 
-    return Response.json(
-      {
-        error: this.sshSession
-          ? "SSH 连接未就绪，请稍后重试"
-          : "请先连接终端会话",
-      },
-      { status: 503 },
+    throw new Error(
+      this.sshSession ? "SSH 连接未就绪，请稍后重试" : "请先连接终端会话",
     );
+  }
+
+  private async handleStatus(
+    session: SessionRow,
+    request: Request,
+  ): Promise<Response> {
+    const processLimit = parseProcessLimitParam(
+      new URL(request.url).searchParams.get("processLimit"),
+    );
+
+    try {
+      const payload = await this.gatherStatusPayload(session, processLimit);
+      return Response.json(payload);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Status collection failed";
+      const status =
+        message === "请先连接终端会话" ||
+        message === "SSH 连接未就绪，请稍后重试"
+          ? 503
+          : 500;
+      return Response.json({ error: message }, { status });
+    }
   }
 
   private async resolveConnectionConfig(
