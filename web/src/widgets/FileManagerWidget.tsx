@@ -32,6 +32,10 @@ import {
   sortSftpEntries,
   type SftpEntry,
 } from "@/lib/sftp-client";
+import {
+  acquireSftpClient,
+  releaseSftpClient,
+} from "@/lib/sftp-session-pool";
 import { cn } from "@/lib/utils";
 
 const FileEditorDialog = lazy(() =>
@@ -140,8 +144,7 @@ export function FileManagerWidget({
   const canDownloadSelected =
     selectedEntry !== null && !selectedEntry.isDir && !downloading && !uploading;
 
-  const disconnectClient = useCallback(() => {
-    clientRef.current?.disconnect();
+  const clearClientRef = useCallback(() => {
     clientRef.current = null;
   }, []);
 
@@ -151,9 +154,9 @@ export function FileManagerWidget({
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
-      disconnectClient();
+      clearClientRef();
     };
-  }, [disconnectClient]);
+  }, [clearClientRef]);
 
   const loadDirectory = useCallback(async (path: string) => {
     if (!isActive()) return;
@@ -180,7 +183,10 @@ export function FileManagerWidget({
 
   useEffect(() => {
     if (!session || session.status !== "open") {
-      disconnectClient();
+      if (session?.status === "closed" || session?.status === "error") {
+        releaseSftpClient(session.sessionId);
+      }
+      clearClientRef();
       if (!isActive()) return;
       setReady(false);
       setRemotePath(".");
@@ -192,8 +198,7 @@ export function FileManagerWidget({
       return;
     }
 
-    const client = new SftpClient();
-    clientRef.current = client;
+    const { sessionId, sftpWsUrl } = session;
     let cancelled = false;
 
     void (async () => {
@@ -207,8 +212,9 @@ export function FileManagerWidget({
         if (cancelled || !isActive()) return;
 
         try {
-          await client.connect(session.sftpWsUrl);
+          const client = await acquireSftpClient(sessionId, sftpWsUrl);
           if (cancelled || !isActive()) return;
+          clientRef.current = client;
           setReady(true);
           const result = await client.list(".");
           if (cancelled || !isActive()) return;
@@ -232,6 +238,8 @@ export function FileManagerWidget({
             continue;
           }
 
+          releaseSftpClient(sessionId);
+          clearClientRef();
           setError(message);
           setReady(false);
           setLoading(false);
@@ -242,17 +250,14 @@ export function FileManagerWidget({
 
     return () => {
       cancelled = true;
-      client.disconnect();
-      if (clientRef.current === client) {
-        clientRef.current = null;
-      }
+      clearClientRef();
     };
   }, [
-    session?.serverId,
     session?.sessionId,
     session?.status,
     session?.sftpWsUrl,
-    disconnectClient,
+    clearClientRef,
+    isActive,
     t,
   ]);
 

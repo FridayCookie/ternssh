@@ -9,6 +9,7 @@ import {
   parseQuickCommandsConfig,
   serializeQuickCommandsConfig,
 } from "@/lib/quick-commands-config";
+import { newId } from "@/lib/id";
 
 interface AddQuickCommandDialogProps {
   open: boolean;
@@ -54,7 +55,7 @@ export function AddQuickCommandDialog({
         ...current,
         customCommands: [
           ...current.customCommands,
-          { id: crypto.randomUUID(), label: nextLabel, command: nextCommand },
+          { id: newId(), label: nextLabel, command: nextCommand },
         ],
       }),
     );

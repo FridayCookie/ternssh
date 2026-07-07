@@ -41,6 +41,11 @@ import {
   type QuickCommandTargetMode,
 } from "@/lib/quick-commands-config";
 import { SETTINGS_RESET_EVENT } from "@/lib/app-settings";
+import { newId } from "@/lib/id";
+import {
+  releaseAllSftpClients,
+  releaseSftpClient,
+} from "@/lib/sftp-session-pool";
 import { ADDABLE_WIDGETS, widgetTitleKey } from "./widgets";
 
 const DEFAULT_GRID_ITEM = {
@@ -79,6 +84,19 @@ function layoutToWidgets(
       };
     })
     .filter((widget): widget is Dashboard["widgets"][number] => widget !== null);
+}
+
+function withoutDeadSessionsForServer(
+  sessions: Record<string, ServerSession>,
+  serverId: string,
+): Record<string, ServerSession> {
+  const next = { ...sessions };
+  for (const [sessionId, session] of Object.entries(next)) {
+    if (session.serverId !== serverId || isSessionAlive(session.status)) continue;
+    releaseSftpClient(sessionId);
+    delete next[sessionId];
+  }
+  return next;
 }
 
 export function DashboardView() {
@@ -174,6 +192,7 @@ export function DashboardView() {
       reconnectAttemptRef.current.clear();
       manualDisconnectServersRef.current.clear();
       manualCloseSessionsRef.current.clear();
+      releaseAllSftpClients();
       setSessions({});
       setActiveServerId(null);
       setActiveSessionId(null);
@@ -261,6 +280,7 @@ export function DashboardView() {
             setSessions((current) => {
               const oldSession = current[sessionId];
               if (!oldSession) return current;
+              releaseSftpClient(sessionId);
               const next = { ...current };
               delete next[sessionId];
               next[created.sessionId] = {
@@ -334,6 +354,7 @@ export function DashboardView() {
       for (const session of forServer) {
         manualCloseSessionsRef.current.add(session.sessionId);
         clearReconnectState(session.sessionId);
+        releaseSftpClient(session.sessionId);
       }
 
       setSessions((current) => {
@@ -383,7 +404,7 @@ export function DashboardView() {
     try {
       const created = await api.createSession(serverId);
       setSessions((current) => ({
-        ...current,
+        ...withoutDeadSessionsForServer(current, serverId),
         [created.sessionId]: {
           serverId,
           sessionId: created.sessionId,
@@ -408,7 +429,7 @@ export function DashboardView() {
     try {
       const created = await api.createSession(targetServerId);
       setSessions((current) => ({
-        ...current,
+        ...withoutDeadSessionsForServer(current, targetServerId),
         [created.sessionId]: {
           serverId: targetServerId,
           sessionId: created.sessionId,
@@ -427,6 +448,7 @@ export function DashboardView() {
     (sessionId: string) => {
       manualCloseSessionsRef.current.add(sessionId);
       clearReconnectState(sessionId);
+      releaseSftpClient(sessionId);
       setSessions((current) => {
         const session = current[sessionId];
         if (!session) return current;
@@ -634,7 +656,7 @@ export function DashboardView() {
     if (!definition) return;
 
     const { x, y } = findWidgetPlacement(layout, definition.defaultSize);
-    const widgetId = crypto.randomUUID();
+    const widgetId = newId();
     const newItem: GridItem = {
       i: widgetId,
       x,
