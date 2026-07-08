@@ -5,6 +5,7 @@ export const ADDABLE_WIDGETS = [
   { type: "status", defaultSize: { w: 3, h: 6 } },
   { type: "network", defaultSize: { w: 3, h: 6 } },
   { type: "process", defaultSize: { w: 4, h: 7 } },
+  { type: "container", defaultSize: { w: 4, h: 7 } },
   { type: "quick_commands", defaultSize: { w: 3, h: 6 } },
   { type: "ai_command", defaultSize: { w: 3, h: 7 } },
 ] as const;

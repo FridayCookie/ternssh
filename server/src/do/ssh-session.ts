@@ -4,6 +4,7 @@ import {
   buildLightStatusCommand,
   buildProcessMetricsCommand,
   clampStatusPollIntervalMs,
+  computeContainerNetRates,
   computeCpuUsage,
   computeInterfaceNetRates,
   computeNetRates,
@@ -50,6 +51,10 @@ export class SshSession extends DurableObject<Env> {
   private lastCpuSample: { total: number; idle: number; at: number } | null =
     null;
   private lastNetInterfaceSamples: Record<
+    string,
+    { rxBytes: number; txBytes: number; at: number }
+  > | null = null;
+  private lastContainerNetSamples: Record<
     string,
     { rxBytes: number; txBytes: number; at: number }
   > | null = null;
@@ -407,10 +412,19 @@ export class SshSession extends DurableObject<Env> {
             now,
           );
         this.lastNetInterfaceSamples = netInterfaceSamples;
+        const { containers, samples: containerNetSamples } =
+          computeContainerNetRates(
+            parsed.metrics.containers,
+            parsed.containerNetBytes,
+            this.lastContainerNetSamples,
+            now,
+          );
+        this.lastContainerNetSamples = containerNetSamples;
         parsed.metrics.netRxRate = netRxRate;
         parsed.metrics.netTxRate = netTxRate;
         parsed.metrics.cpuUsedPercent = cpuUsedPercent;
         parsed.metrics.netInterfaces = netInterfaces;
+        parsed.metrics.containers = containers;
 
         return {
           serverId: session.server_id,
@@ -494,6 +508,7 @@ export class SshSession extends DurableObject<Env> {
       this.lastNetSample = null;
       this.lastCpuSample = null;
       this.lastNetInterfaceSamples = null;
+      this.lastContainerNetSamples = null;
     }
   }
 

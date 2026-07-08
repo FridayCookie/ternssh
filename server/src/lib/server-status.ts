@@ -26,6 +26,8 @@ export interface ServerStatusMetrics {
   netInterfaces: NetInterfaceMetrics[];
   processCount: number | null;
   topProcesses: ProcessMetrics[];
+  dockerAvailable: boolean;
+  containers: ContainerMetrics[];
 }
 
 export interface NetInterfaceMetrics {
@@ -50,6 +52,17 @@ export interface ProcessMetrics {
   rssKb: number;
   stat: string;
   command: string;
+}
+
+export interface ContainerMetrics {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  cpuPercent: number | null;
+  netRxRate: number | null;
+  netTxRate: number | null;
 }
 
 export const DEFAULT_PROCESS_LIMIT = 10;
@@ -123,6 +136,57 @@ END {
 }'`;
 }
 
+export function buildDockerStatusSegment(): string {
+  return [
+    'command -v docker >/dev/null 2>&1 && echo "DOCKERAVAIL:1" || echo "DOCKERAVAIL:0"',
+    'command -v docker >/dev/null 2>&1 && docker ps -a --format \'{{.ID}}|{{.Names}}|{{.Image}}|{{.Status}}|{{.State}}\' 2>/dev/null | head -n 50 | sed \'s/^/DOCKER:/\'',
+    'command -v docker >/dev/null 2>&1 && docker stats --no-stream --format \'{{.ID}}|{{.CPUPerc}}|{{.NetIO}}\' 2>/dev/null | head -n 50 | sed \'s/%//g; s/^/DOCKERSTAT:/\'',
+  ].join("; ");
+}
+
+const DOCKER_BYTE_MULTIPLIERS: Record<string, number> = {
+  b: 1,
+  kb: 1_000,
+  kib: 1_024,
+  mb: 1_000_000,
+  mib: 1_024 ** 2,
+  gb: 1_000_000_000,
+  gib: 1_024 ** 3,
+  tb: 1_000_000_000_000,
+  tib: 1_024 ** 4,
+};
+
+export function parseDockerByteSize(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (trimmed === "0" || /^0\s*b$/i.test(trimmed)) return 0;
+
+  const match = trimmed.match(/^([\d.]+)\s*([a-zA-Z]+)$/);
+  if (!match) return null;
+
+  const amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+
+  const unit = match[2].toLowerCase();
+  const multiplier = DOCKER_BYTE_MULTIPLIERS[unit];
+  if (!multiplier) return null;
+
+  return Math.round(amount * multiplier);
+}
+
+export function parseDockerNetIO(
+  value: string,
+): { rxBytes: number | null; txBytes: number | null } {
+  const parts = value.split("/");
+  if (parts.length < 2) {
+    return { rxBytes: null, txBytes: null };
+  }
+  return {
+    rxBytes: parseDockerByteSize(parts[0] ?? ""),
+    txBytes: parseDockerByteSize(parts[1] ?? ""),
+  };
+}
+
 export function buildLightStatusCommand(): string {
   return [
     'echo "LOAD:$(cut -d" " -f1-3 /proc/loadavg 2>/dev/null)"',
@@ -134,6 +198,7 @@ export function buildLightStatusCommand(): string {
     'awk \'$1 ~ /:/ {gsub(/:/,"",$1); if ($1!="lo") printf "IF:%s %.0f %.0f\\n", $1, $2+0, $10+0}\' /proc/net/dev 2>/dev/null',
     'echo "UPTIME:$(cut -d" " -f1 /proc/uptime 2>/dev/null)"',
     'echo "OS:$(uname -sr 2>/dev/null)"',
+    buildDockerStatusSegment(),
   ].join("; ");
 }
 
@@ -162,6 +227,7 @@ export function parseStatusOutput(output: string): {
   cpuTotalJiffies: number | null;
   cpuIdleJiffies: number | null;
   netInterfaces: NetInterfaceSnapshot[];
+  containerNetBytes: Record<string, { rxBytes: number; txBytes: number }>;
 } {
   const metrics: ServerStatusMetrics = {
     load1: null,
@@ -185,6 +251,8 @@ export function parseStatusOutput(output: string): {
     netInterfaces: [],
     processCount: null,
     topProcesses: [],
+    dockerAvailable: false,
+    containers: [],
   };
   let netRxBytes: number | null = null;
   let netTxBytes: number | null = null;
@@ -192,6 +260,18 @@ export function parseStatusOutput(output: string): {
   let cpuIdleJiffies: number | null = null;
   const netInterfaces: NetInterfaceSnapshot[] = [];
   const topProcesses: ProcessMetrics[] = [];
+  const containers: ContainerMetrics[] = [];
+  const dockerStatsById = new Map<
+    string,
+    {
+      cpuPercent: number | null;
+      rxBytes: number | null;
+      txBytes: number | null;
+    }
+  >();
+  const containerNetBytes: Record<string, { rxBytes: number; txBytes: number }> =
+    {};
+  let dockerAvailable = false;
 
   for (const line of output.split("\n")) {
     const trimmed = line.trim();
@@ -301,8 +381,62 @@ export function parseStatusOutput(output: string): {
         });
         break;
       }
+      case "DOCKERAVAIL":
+        dockerAvailable = value === "1";
+        break;
+      case "DOCKER": {
+        if (!value) break;
+        const parts = value.split("|");
+        if (parts.length < 5) break;
+        const id = parts[0]?.trim();
+        const name = parts[1]?.trim();
+        if (!id || !name) break;
+        containers.push({
+          id,
+          name,
+          image: parts[2]?.trim() || "-",
+          status: parts[3]?.trim() || "-",
+          state: parts[4]?.trim().toLowerCase() || "unknown",
+          cpuPercent: null,
+          netRxRate: null,
+          netTxRate: null,
+        });
+        break;
+      }
+      case "DOCKERSTAT": {
+        if (!value) break;
+        const parts = value.split("|");
+        const id = parts[0]?.trim();
+        if (!id) break;
+        const cpuPercent = parseNumber(parts[1]);
+        const { rxBytes, txBytes } = parseDockerNetIO(parts.slice(2).join("|"));
+        dockerStatsById.set(id, { cpuPercent, rxBytes, txBytes });
+        if (rxBytes !== null && txBytes !== null) {
+          containerNetBytes[id] = { rxBytes, txBytes };
+        }
+        break;
+      }
     }
   }
+
+  for (const container of containers) {
+    const stats = dockerStatsById.get(container.id);
+    container.cpuPercent = stats?.cpuPercent ?? null;
+  }
+
+  containers.sort((a, b) => {
+    const stateOrder = (state: string) => {
+      if (state === "running") return 0;
+      if (state === "restarting") return 1;
+      if (state === "paused") return 2;
+      return 3;
+    };
+    const byState = stateOrder(a.state) - stateOrder(b.state);
+    if (byState !== 0) return byState;
+    return a.name.localeCompare(b.name);
+  });
+  metrics.dockerAvailable = dockerAvailable;
+  metrics.containers = containers;
 
   netInterfaces.sort((a, b) => a.name.localeCompare(b.name));
   metrics.netInterfaces = netInterfaces.map((iface) => ({
@@ -319,6 +453,7 @@ export function parseStatusOutput(output: string): {
     cpuTotalJiffies,
     cpuIdleJiffies,
     netInterfaces,
+    containerNetBytes,
   };
 }
 
@@ -439,6 +574,46 @@ export function computeInterfaceNetRates(
   }
 
   return { interfaces: result, samples };
+}
+
+export function computeContainerNetRates(
+  containers: ContainerMetrics[],
+  currentBytes: Record<string, { rxBytes: number; txBytes: number }>,
+  lastSamples: Record<
+    string,
+    { rxBytes: number; txBytes: number; at: number }
+  > | null,
+  now = Date.now(),
+): {
+  containers: ContainerMetrics[];
+  samples: Record<string, { rxBytes: number; txBytes: number; at: number }>;
+} {
+  const samples = { ...(lastSamples ?? {}) };
+  const result = containers.map((container) => {
+    const bytes = currentBytes[container.id];
+    if (!bytes) {
+      return { ...container, netRxRate: null, netTxRate: null };
+    }
+
+    const { netRxRate, netTxRate, sample } = computeNetRates(
+      bytes.rxBytes,
+      bytes.txBytes,
+      lastSamples?.[container.id] ?? null,
+      now,
+    );
+    if (sample) {
+      samples[container.id] = sample;
+    }
+    return { ...container, netRxRate, netTxRate };
+  });
+
+  for (const id of Object.keys(samples)) {
+    if (!containers.some((container) => container.id === id)) {
+      delete samples[id];
+    }
+  }
+
+  return { containers: result, samples };
 }
 
 export function formatBytes(bytes: number | null): string {

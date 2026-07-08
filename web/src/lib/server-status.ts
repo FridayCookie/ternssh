@@ -20,6 +20,8 @@ export interface ServerStatusMetrics {
   netInterfaces: NetInterfaceMetrics[];
   processCount: number | null;
   topProcesses: ProcessMetrics[];
+  dockerAvailable: boolean;
+  containers: ContainerMetrics[];
 }
 
 export interface ProcessMetrics {
@@ -30,6 +32,17 @@ export interface ProcessMetrics {
   rssKb: number;
   stat: string;
   command: string;
+}
+
+export interface ContainerMetrics {
+  id: string;
+  name: string;
+  image: string;
+  status: string;
+  state: string;
+  cpuPercent: number | null;
+  netRxRate: number | null;
+  netTxRate: number | null;
 }
 
 export interface NetInterfaceMetrics {

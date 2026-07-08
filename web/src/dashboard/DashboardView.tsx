@@ -23,6 +23,7 @@ import { QuickCommandsWidget } from "@/widgets/QuickCommandsWidget";
 import { StatusWidget } from "@/widgets/StatusWidget";
 import { NetworkStatusWidget } from "@/widgets/NetworkStatusWidget";
 import { ProcessStatusWidget } from "@/widgets/ProcessStatusWidget";
+import { ContainerStatusWidget } from "@/widgets/ContainerStatusWidget";
 import { TerminalWidget } from "@/widgets/TerminalWidget";
 import type { SessionCloseReason } from "@/widgets/types";
 import { AddGroupDialog } from "./AddGroupDialog";
@@ -895,7 +896,7 @@ export function DashboardView() {
             );
           }
 
-          if (widget.type === "status" || widget.type === "network" || widget.type === "process") {
+          if (widget.type === "status" || widget.type === "network" || widget.type === "process" || widget.type === "container") {
             return (
               <div className="widget-no-drag flex items-center gap-1">
                 <Button
@@ -1108,6 +1109,20 @@ export function DashboardView() {
             );
           }
 
+          if (widget.type === "container") {
+            return (
+              <ContainerStatusWidget
+                activeServerId={activeServerId}
+                activeSessionId={activeSessionId}
+                pollIntervalMs={
+                  parseStatusWidgetConfig(widget.config_json).pollIntervalMs
+                }
+                sessions={sessions}
+                tree={tree}
+              />
+            );
+          }
+
           if (widget.type === "quick_commands") {
             return (
               <QuickCommandsWidget
@@ -1225,6 +1240,7 @@ export function DashboardView() {
             )?.type;
             if (type === "network") return "network.settingsTitle";
             if (type === "process") return "process.settingsTitle";
+            if (type === "container") return "container.settingsTitle";
             return "status.settingsTitle";
           })()
         }
