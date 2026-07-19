@@ -17,6 +17,7 @@ import { useI18n } from "@/i18n";
 import { usePersonalization } from "@/theme";
 import { parseProcessWidgetConfig } from "@/lib/status-widget-config";
 import { useStatusPollInterval } from "@/lib/status-poll-interval";
+import { useLayoutLocked } from "@/lib/layout-lock";
 import { useLeavePageWarning } from "@/lib/use-leave-page-warning";
 import { ServerListWidget } from "@/widgets/ServerListWidget";
 import { FileManagerWidget } from "@/widgets/FileManagerWidget";
@@ -111,6 +112,7 @@ function withoutDeadSessionsForServer(
 export function DashboardView() {
   const { t } = useI18n();
   const { gridMargin } = usePersonalization();
+  const layoutLocked = useLayoutLocked();
   const pollIntervalMs = useStatusPollInterval();
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [layout, setLayout] = useState<GridItem[]>([]);
@@ -599,6 +601,7 @@ export function DashboardView() {
   }, []);
 
   const handleLayoutChange = useCallback((nextLayout: GridItem[]) => {
+    if (layoutLocked) return;
     isEditingRef.current = true;
     setLayout((current) =>
       layoutsEqual(current, nextLayout) ? current : nextLayout,
@@ -625,7 +628,7 @@ export function DashboardView() {
         }
       })();
     }, 400);
-  }, []);
+  }, [layoutLocked, t]);
 
   const handleRemoveWidget = useCallback((widgetId: string) => {
     const dashboardSnapshot = dashboardRef.current;
@@ -864,6 +867,7 @@ export function DashboardView() {
       <GridDashboard
         layout={layout}
         margin={[gridMargin, gridMargin]}
+        layoutLocked={layoutLocked}
         onLayoutChange={handleLayoutChange}
         getItemTitle={(item) => {
           const widget = widgetById.get(item.i);

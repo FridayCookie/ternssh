@@ -80,6 +80,8 @@ export const zh = {
     layoutImportFailed: "导入布局失败",
     layoutImportConfirm: "用导入的文件替换当前仪表盘布局？",
     layoutImportSummary: "来自「{name}」的 {count} 个组件",
+    layoutLock: "锁定布局",
+    layoutLockHint: "锁定后隐藏组件的拖拽与缩放控件，防止误操作",
     statusPollInterval: "状态采集间隔（秒）",
     statusPollIntervalHint:
       "适用于所有状态类组件（服务器、网络、进程、容器）。范围 {min}–{max} 秒。带宽图表固定显示近 {minutes} 分钟{slots}。",

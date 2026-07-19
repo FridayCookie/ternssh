@@ -86,6 +86,9 @@ export const en: Messages = {
     layoutImportConfirm:
       "Replace the current dashboard layout with the imported file?",
     layoutImportSummary: "{count} widgets from “{name}”",
+    layoutLock: "Lock layout",
+    layoutLockHint:
+      "Hide drag and resize handles on widgets to prevent accidental changes",
     statusPollInterval: "Status sample interval (seconds)",
     statusPollIntervalHint:
       "Applies to all status widgets (server, network, process, container). Range {min}–{max}s. Bandwidth charts show the last {minutes} minutes{slots}.",
